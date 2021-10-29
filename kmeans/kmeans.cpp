@@ -67,7 +67,7 @@ namespace Solution
 				Assignment[I] = AssignmentI;
 			}
 
-			if (Assignment == AssignmentBak)
+			if (!__builtin_memcmp(Assignment.data(), AssignmentBak.data(), sizeof(FIndex) * NumPoint))
 			{
 				goto JConverge;
 			}
