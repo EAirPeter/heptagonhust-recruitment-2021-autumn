@@ -35,8 +35,12 @@ namespace Solution
 
 	TVector<FIndex> FKMeans::Run(int MaxIterations)
 	{
+		using std::swap;
+
 		// The return vector
 		TVector<FIndex> Assignment(NumPoint, 0);
+		TVector<FIndex> AssignmentBak(NumPoint, 0);
+
 		int CurrIteration = 0;
 		std::cout << "Running kmeans with num points = " << NumPoint
 			<< ", num centers = " << NumCenter
@@ -46,7 +50,6 @@ namespace Solution
 		while (MaxIterations--)
 		{
 			++CurrIteration;
-			TVector<index_t> AssignmentBak = Assignment;
 
 			for (FIndex I = 0; I < NumPoint; ++I)
 			{
@@ -86,6 +89,8 @@ namespace Solution
 				Centers[J].X /= PointCount[J];
 				Centers[J].Y /= PointCount[J];
 			}
+
+			swap(Assignment, AssignmentBak);
 		}
 
 	JConverge:
