@@ -14,6 +14,7 @@ using std::chrono::high_resolution_clock;
 using std::chrono::microseconds;
 
 int main(int argc, char **argv) {
+  std::ios_base::sync_with_stdio(false);
   if (argc != 2) {
     std::cout << "Usage: ./kmeans <output_file.txt>";
     return 1;
@@ -38,11 +39,11 @@ int main(int argc, char **argv) {
     << (double) duration_cast<microseconds>(end - start).count() / 1000000.0
     << "s" << std::endl;
 
-  std::cout << "Writing output files..." << std::endl;
+  std::cout << "Writing output files..." << "\n";
   std::ofstream ofs;
   ofs.open(argv[1]);
   for (int i = 0; i < numPoints; i++)
-    ofs << points[i] << " " << result[i] << std::endl;
+    ofs << points[i] << " " << result[i] << "\n";
   ofs.close();
   return 0;
 }
