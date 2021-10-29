@@ -1,13 +1,22 @@
 #ifndef __KMEANS_HPP_
 #define __KMEANS_HPP_
 
+#include <cstdlib>
 #include <iostream>
 #include <vector>
 
 #ifdef _MSC_VER
 #define FORCEINLINE __forceinline
+#define __builtin_memcpy memcpy
+#define __builtin_memset memset
 #else
 #define FORCEINLINE __attribute__((always_inline))
+#endif
+
+#ifdef NDEBUG
+#define check(...)
+#else
+#define check(Expr) (static_cast<bool>(Expr) || (::std::abort(), 0))
 #endif
 
 using index_t = int;
@@ -44,9 +53,11 @@ namespace Solution
 	template<class RElement>
 	using TVector = ::std::vector<RElement>;
 
+	static_assert(std::conjunction_v<std::is_trivial<FPoint>, std::is_standard_layout<FPoint>>);
+
 	struct FKMeans
 	{
-		TVector<FPoint> Points;
+		const FPoint* Points;
 		TVector<FPoint> Centers;
 		FIndex NumPoint;
 		FIndex NumCenter;

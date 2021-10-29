@@ -1,5 +1,7 @@
 #include "kmeans.hpp"
 
+#include <algorithm>
+#include <execution>
 #include <queue>
 #include <limits>
 
@@ -20,14 +22,10 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 	return LHS << RHS.X << " " << RHS.Y;
 }
 
-#ifdef _MSC_VER
-#define __builtin_memset memset
-#endif
-
 namespace Solution
 {
 	FKMeans::FKMeans(const TVector<FPoint>& InPoints, const TVector<FPoint>& InInitCenters)
-		: Points(InPoints)
+		: Points(InPoints.data())
 		, Centers(InInitCenters)
 		, NumPoint(static_cast<FIndex>(InPoints.size()))
 		, NumCenter(static_cast<FIndex>(InInitCenters.size()))
@@ -38,27 +36,27 @@ namespace Solution
 		using std::swap;
 
 		// The return vector
-		TVector<FIndex> Assignment(NumPoint, 0);
-		TVector<FIndex> AssignmentBak(NumPoint, 0);
+		TVector<FIndex> Assignment(NumPoint);
+		TVector<FIndex> AssignmentBak(NumPoint);
 
 		int CurrIteration = 0;
 		std::cout << "Running kmeans with num points = " << NumPoint
 			<< ", num centers = " << NumCenter
 			<< ", max iterations = " << MaxIterations << "...\n";
 
-		TVector<FIndex> PointCount(NumCenter, 0);
+		TVector<FIndex> PointCount(NumCenter);
 		while (MaxIterations--)
 		{
 			++CurrIteration;
 
 			for (FIndex I = 0; I < NumPoint; ++I)
 			{
-				FPoint& PointI = Points[I];
+				const FPoint& PointI = Points[I];
 				double MinDis = std::numeric_limits<double>::max();
 				Assignment[I] = -1;
 				for (int K = 0; K < NumCenter; ++K)
 				{
-					FPoint& CenterK = Centers[K];
+					const FPoint& CenterK = Centers[K];
 					const double Dis = PointI.Distance(CenterK);
 					if (Dis < MinDis)
 					{
