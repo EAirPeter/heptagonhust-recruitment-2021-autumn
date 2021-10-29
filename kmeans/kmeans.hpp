@@ -4,6 +4,12 @@
 #include <iostream>
 #include <vector>
 
+#ifdef _MSC_VER
+#define FORCEINLINE __forceinline
+#else
+#define FORCEINLINE __attribute__((always_inline))
+#endif
+
 using index_t = int;
 
 struct Point
@@ -20,17 +26,15 @@ struct Point
 		double Y;
 	};
 
-	Point() : X(0), Y(0) {}
+	FORCEINLINE Point() noexcept = default;
 	Point(int InX, int InY) : X(InX), Y(InY) {}
-	Point(const Point&) = default;
-	~Point() = default;
 
 	[[nodiscard]]
 	double Distance(const Point& Other) const noexcept;
 };
 
 std::istream& operator>>(std::istream& LHS, Point& RHS);
-std::ostream& operator<<(std::ostream& LHS, Point& RHS);
+std::ostream& operator<<(std::ostream& LHS, const Point& RHS);
 
 namespace Solution
 {

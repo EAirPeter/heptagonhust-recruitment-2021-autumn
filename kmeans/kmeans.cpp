@@ -15,7 +15,7 @@ std::istream& operator>>(std::istream& LHS, Point& RHS)
 	return LHS >> RHS.X >> RHS.Y;
 }
 
-std::ostream& operator<<(std::ostream& LHS, Point& RHS)
+std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 {
 	return LHS << RHS.X << " " << RHS.Y;
 }
@@ -51,8 +51,8 @@ namespace Solution
 				Assignment[I] = -1;
 				for (int K = 0; K < NumCenter; ++K)
 				{
-					FPoint CenterK = Centers[K];
-					double Dis = PointI.Distance(CenterK);
+					FPoint& CenterK = Centers[K];
+					const double Dis = PointI.Distance(CenterK);
 					if (Dis < MinDis)
 					{
 						MinDis = Dis;
@@ -71,7 +71,7 @@ namespace Solution
 
 			for (FIndex I = 0; I < NumPoint; ++I)
 			{
-				FIndex ClusterI = Assignment[I];
+				const FIndex ClusterI = Assignment[I];
 				Centers[ClusterI].X += Points[I].X;
 				PointCount[ClusterI]++;
 			}
@@ -85,7 +85,7 @@ namespace Solution
 
 			for (FIndex I = 0; I < NumPoint; ++I)
 			{
-				FIndex ClusterI = Assignment[I];
+				const FIndex ClusterI = Assignment[I];
 				Centers[ClusterI].Y += Points[I].Y;
 				PointCount[ClusterI]++;
 			}
@@ -97,7 +97,7 @@ namespace Solution
 		}
 
 	JConverge:
-		std::cout << "Finished in " << CurrIteration << " iterations." << std::endl;
+		std::cout << "Finished in " << CurrIteration << " iterations.\n";
 		return Assignment;
 	}
 
