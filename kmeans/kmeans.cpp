@@ -72,33 +72,18 @@ namespace Solution
 
 			__builtin_memset(Centers.data(), 0, sizeof(FPoint) * NumCenter);
 			__builtin_memset(PointCount.data(), 0, sizeof(FIndex) * NumCenter);
-			//Centers.assign(NumCenter, FPoint());
-			//PointCount.assign(NumPoint, 0);
 
 			for (FIndex I = 0; I < NumPoint; ++I)
 			{
 				const FIndex ClusterI = Assignment[I];
 				Centers[ClusterI].X += Points[I].X;
-				PointCount[ClusterI]++;
-			}
-
-			for (FIndex J = 0; J < NumCenter; ++J)
-			{
-				Centers[J].X /= PointCount[J];
-			}
-
-			//PointCount.assign(NumPoint, 0);
-			__builtin_memset(PointCount.data(), 0, sizeof(FIndex) * NumCenter);
-
-			for (FIndex I = 0; I < NumPoint; ++I)
-			{
-				const FIndex ClusterI = Assignment[I];
 				Centers[ClusterI].Y += Points[I].Y;
 				PointCount[ClusterI]++;
 			}
 
 			for (FIndex J = 0; J < NumCenter; ++J)
 			{
+				Centers[J].X /= PointCount[J];
 				Centers[J].Y /= PointCount[J];
 			}
 		}
