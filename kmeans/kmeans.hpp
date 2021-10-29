@@ -1,36 +1,64 @@
 #ifndef __KMEANS_HPP_
 #define __KMEANS_HPP_
 
-#include <vector>
 #include <iostream>
+#include <vector>
 
 using index_t = int;
 
-struct Point {
-  double x, y;
+struct Point
+{
+	union
+	{
+		double x;
+		double X;
+	};
 
-  Point() : x(0), y(0) {}
-  Point(int _x, int _y) : x(_x), y(_y) {}
-  Point(const Point &other) = default;
-  ~Point() = default;
+	union
+	{
+		double y;
+		double Y;
+	};
 
-  [[nodiscard]] double Distance(const Point &other) const noexcept;
+	Point() : X(0), Y(0) {}
+	Point(int InX, int InY) : X(InX), Y(InY) {}
+	Point(const Point&) = default;
+	~Point() = default;
+
+	[[nodiscard]]
+	double Distance(const Point& Other) const noexcept;
 };
 
-class Kmeans {
+std::istream& operator>>(std::istream& LHS, Point& RHS);
+std::ostream& operator<<(std::ostream& LHS, Point& RHS);
+
+namespace Solution
+{
+	using FIndex = ::index_t;
+	using FPoint = ::Point;
+
+	template<class RElement>
+	using TVector = ::std::vector<RElement>;
+
+	struct FKMeans
+	{
+		TVector<FPoint> Points;
+		TVector<FPoint> Centers;
+		FIndex NumPoint;
+		FIndex NumCenter;
+
+		FKMeans(const TVector<FPoint>& InPoints, const TVector<FPoint>& InInitCenters);
+
+		TVector<FIndex> Run(int MaxIterations = 1000);
+	};
+}
+
+// Public interface
+class Kmeans : private ::Solution::FKMeans
+{
 public:
-  Kmeans(const std::vector<Point> &points,
-         const std::vector<Point> &init_centers);
-  std::vector<index_t> Run(int max_iterations = 1000);
-
-private:
-  std::vector<Point> m_points;
-  std::vector<Point> m_centers;
-  int m_numPoints;
-  int m_numCenters;
+	using FKMeans::FKMeans;
+	using FKMeans::Run;
 };
-
-std::istream &operator>>(std::istream &is, Point &pt);
-std::ostream &operator<<(std::ostream &os, Point &pt);
 
 #endif // __KMEANS_HPP_
