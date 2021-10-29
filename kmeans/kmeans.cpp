@@ -25,7 +25,7 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 namespace Solution
 {
 	FKMeans::FKMeans(const TVector<FPoint>& InPoints, const TVector<FPoint>& InInitCenters)
-		: Points(InPoints.data())
+		: Points(InPoints)
 		, Centers(InInitCenters)
 		, NumPoint(static_cast<FIndex>(InPoints.size()))
 		, NumCenter(static_cast<FIndex>(InInitCenters.size()))

@@ -57,7 +57,7 @@ namespace Solution
 
 	struct FKMeans
 	{
-		const FPoint* Points;
+		TVector<FPoint> Points;
 		TVector<FPoint> Centers;
 		FIndex NumPoint;
 		FIndex NumCenter;
