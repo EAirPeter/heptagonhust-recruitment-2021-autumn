@@ -20,6 +20,10 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 	return LHS << RHS.X << " " << RHS.Y;
 }
 
+#ifdef _MSC_VER
+#define __builtin_memset memset
+#endif
+
 namespace Solution
 {
 	FKMeans::FKMeans(const TVector<FPoint>& InPoints, const TVector<FPoint>& InInitCenters)
@@ -66,8 +70,10 @@ namespace Solution
 				goto JConverge;
 			}
 
-			Centers.assign(NumCenter, FPoint());
-			PointCount.assign(NumPoint, 0);
+			__builtin_memset(Centers.data(), 0, sizeof(FPoint) * NumCenter);
+			__builtin_memset(PointCount.data(), 0, sizeof(FIndex) * NumCenter);
+			//Centers.assign(NumCenter, FPoint());
+			//PointCount.assign(NumPoint, 0);
 
 			for (FIndex I = 0; I < NumPoint; ++I)
 			{
@@ -81,7 +87,8 @@ namespace Solution
 				Centers[J].X /= PointCount[J];
 			}
 
-			PointCount.assign(NumPoint, 0);
+			//PointCount.assign(NumPoint, 0);
+			__builtin_memset(PointCount.data(), 0, sizeof(FIndex) * NumCenter);
 
 			for (FIndex I = 0; I < NumPoint; ++I)
 			{
