@@ -53,7 +53,7 @@ namespace Solution
 			{
 				const FPoint& PointI = Points[I];
 				double MinDis = std::numeric_limits<double>::max();
-				Assignment[I] = -1;
+				FIndex AssignmentI = -1;
 				for (int K = 0; K < NumCenter; ++K)
 				{
 					const FPoint& CenterK = Centers[K];
@@ -61,9 +61,10 @@ namespace Solution
 					if (Dis < MinDis)
 					{
 						MinDis = Dis;
-						Assignment[I] = K;
+						AssignmentI = K;
 					}
 				}
+				Assignment[I] = AssignmentI;
 			}
 
 			if (Assignment == AssignmentBak)
