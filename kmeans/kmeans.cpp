@@ -33,7 +33,6 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #define USE_SIMD_DISTANCE           (1 && USE_SIMD)
 #define USE_SIMD_UPDATE_ASSIGNMENT  (0 && USE_SIMD)
 #define USE_SIMD_UPDATE_CENTER      (0 && USE_SIMD)
-#define USE_SIMD_TRANSPOSE          (0 && USE_SIMD)
 #define USE_SIMD_FMA                (0 && USE_SIMD)
 
 #ifdef _MSC_VER
@@ -232,127 +231,7 @@ struct FKMeans
 	TVector<FIndex> Run(int NumIteration = 1000);
 };
 
-#if USE_SIMD_TRANSPOSE
-// 0x0y1x1y2x2y3x3y -> 0x2x1x3x 0y2y1y3y
-// Last: 0x0y1x1y2x2y -> 0x0y1x1y2x2y
-inline void SimdTranspose(double* Restrict Dst, const double* Restrict Src, FIndex NumPoint)
-{
-	Dst = static_cast<double*>(AssumeVecAligned(Dst));
-	while (NumPoint >= 4)
-	{
-		const __m256d A = _mm256_load_pd(Src);
-		const __m256d B = _mm256_load_pd(Src + 4);
-		const __m256d C = _mm256_unpacklo_pd(A, B);
-		const __m256d D = _mm256_unpackhi_pd(A, B);
-		_mm256_store_pd(Dst, C);
-		_mm256_store_pd(Dst + 4, D);
-		NumPoint -= 4;
-		Src += 8;
-		Dst += 8;
-	}
-	BuiltinMemCpy(Dst, Src, sizeof(double) * NumPoint);
-}
-#endif
-
 #if USE_SIMD_UPDATE_ASSIGNMENT
-#if USE_SIMD_TRANSPOSE
-// 0x2x1x3x 0y2y1y3y 4x6x5x7x 4y6y5y7y -> 0213 4657 -> 0415 2637
-// 0x2x1x3x 0y2y1y3y -> 02 13 -> 0123
-// 0x0y1x1y2x2y -> 012
-inline void SimdUpdateAssignment(FIndex* Restrict Assignment, const double* Restrict Points, const FPoint* Centers, FIndex NumPoint, FIndex NumCenter)
-{
-	Assignment = static_cast<FIndex*>(AssumeVecAligned(Assignment));
-	Points = static_cast<const double*>(AssumeVecAligned(Points));
-
-	while (NumPoint >= 8)
-	{
-		const __m256d Px0 = _mm256_load_pd(Points);
-		const __m256d Py0 = _mm256_load_pd(Points + 4);
-		const __m256d Px1 = _mm256_load_pd(Points + 8);
-		const __m256d Py1 = _mm256_load_pd(Points + 12);
-		__m256 Asg;
-		__m256d MinDis0 = _mm256_set1_pd(std::numeric_limits<double>::max());
-		__m256d MinDis1 = _mm256_set1_pd(std::numeric_limits<double>::max());
-		for (FIndex CenterId = 0; CenterId < NumCenter; ++CenterId)
-		{
-			const __m256d Cx = _mm256_set1_pd(Centers[CenterId].X);
-			const __m256d Cy = _mm256_set1_pd(Centers[CenterId].Y);
-			__m256d T0 = _mm256_sub_pd(Px0, Cx);
-			__m256d T1 = _mm256_sub_pd(Px1, Cx);
-			const __m256d U0 = _mm256_sub_pd(Py0, Cy);
-			const __m256d U1 = _mm256_sub_pd(Py1, Cy);
-			const __m256 AsgI = _mm256_castsi256_ps(_mm256_set1_epi32(CenterId));
-#if USE_SIMD_FMA
-			T0 = _mm256_fmadd_pd(T0, T0, _mm256_mul_pd(U0, U0));
-			T1 = _mm256_fmadd_pd(T1, T1, _mm256_mul_pd(U1, U1));
-#else
-			T0 = _mm256_add_pd(_mm256_mul_pd(T0, T0), _mm256_mul_pd(U0, U0));
-			T1 = _mm256_add_pd(_mm256_mul_pd(T1, T1), _mm256_mul_pd(U1, U1));
-#endif
-			const __m256 F0 = _mm256_castpd_ps(_mm256_cmp_pd(T0, MinDis0, _CMP_LT_OQ));
-			const __m256 F1 = _mm256_castpd_ps(_mm256_cmp_pd(T1, MinDis1, _CMP_LT_OQ));
-			const __m256 Mask = _mm256_blend_ps(F0, F1, 0b10101010);
-
-			MinDis0 = _mm256_min_pd(T0, MinDis0);
-			MinDis1 = _mm256_min_pd(T1, MinDis1);
-			Asg = _mm256_blendv_ps(Asg, AsgI, Mask);
-		}
-		_mm256_store_ps(reinterpret_cast<float*>(Assignment), Asg);
-		NumPoint -= 8;
-		Points += 16;
-		Assignment += 8;
-	}
-	if (NumPoint >= 4)
-	{
-		const __m256d Px0 = _mm256_load_pd(Points);
-		const __m256d Py0 = _mm256_load_pd(Points + 4);
-		__m128 Asg;
-		__m256d MinDis0 = _mm256_set1_pd(std::numeric_limits<double>::max());
-		for (FIndex CenterId = 0; CenterId < NumCenter; ++CenterId)
-		{
-			const __m256d Cx = _mm256_set1_pd(Centers[CenterId].X);
-			const __m256d Cy = _mm256_set1_pd(Centers[CenterId].Y);
-			__m256d T0 = _mm256_sub_pd(Px0, Cx);
-			const __m256d U0 = _mm256_sub_pd(Py0, Cy);
-			const __m128 AsgI = _mm_castsi128_ps(_mm_set1_epi32(CenterId));
-#if USE_SIMD_FMA
-			T0 = _mm256_fmadd_pd(T0, T0, _mm256_mul_pd(U0, U0));
-#else
-			T0 = _mm256_add_pd(_mm256_mul_pd(T0, T0), _mm256_mul_pd(U0, U0));
-#endif
-			const __m256 F0 = _mm256_castpd_ps(_mm256_cmp_pd(T0, MinDis0, _CMP_LT_OQ));
-			const __m128 Mask = _mm_blend_ps(_mm256_castps256_ps128(F0), _mm256_extractf128_ps(F0, 1), 0x1010);
-
-			MinDis0 = _mm256_min_pd(T0, MinDis0);
-			Asg = _mm_blendv_ps(Asg, AsgI, Mask);
-		}
-		_mm_store_ps(reinterpret_cast<float*>(Assignment), Asg);
-		NumPoint -= 4;
-		Points += 8;
-		Assignment += 4;
-	}
-	while (NumPoint)
-	{
-		FIndex Asg;
-		double MinDis = std::numeric_limits<double>::max();
-		for (FIndex CenterId = 0; CenterId < NumCenter; ++CenterId)
-		{
-			const double T0 = Points[0] - Centers[CenterId].X;
-			const double T1 = Points[1] - Centers[CenterId].Y;
-			double Dis = T0 * T0 + T1 * T1;
-			if (Dis < MinDis)
-			{
-				MinDis = Dis;
-				Asg = CenterId;
-			}
-		}
-		*Assignment = Asg;
-		--NumPoint;
-		Points += 2;
-		++Assignment;
-	}
-}
-#else
 inline void SimdUpdateAssignment(FIndex* Restrict Assignment, const double* Restrict Points, const FPoint* Centers, FIndex NumPoint, FIndex NumCenter)
 {
 	Assignment = static_cast<FIndex*>(AssumeVecAligned(Assignment, VecAlignment));
@@ -370,16 +249,10 @@ inline void SimdUpdateAssignment(FIndex* Restrict Assignment, const double* Rest
 	}
 }
 #endif
-#endif
 
 AttrPerf
 inline void InitCopy(FPoint* Restrict Dst, const FPoint* Restrict Src, FIndex NumPoint)
 {
-#if !USE_SIMD_TRANSPOSE
-	BuiltinMemCpy(Dst, Src, sizeof(FPoint) * NumPoint);
-#else
-	SimdTranspose(Dst, reinterpret_cast<const double*>(Src), NumPoint);
-#endif
 }
 
 inline FKMeans::FKMeans(const TVector<FPoint>& InPoints, const TVector<FPoint>& InInitCenters)
@@ -400,7 +273,7 @@ inline FKMeans::FKMeans(const TVector<FPoint>& InPoints, const TVector<FPoint>& 
 
 	check(Points);
 	check(Centers);
-	InitCopy(Points, InPoints.data(), NumPoint);
+	BuiltinMemCpy(Points, InPoints.data(), sizeof(FPoint) * NumPoint);
 	BuiltinMemCpy(Centers, InInitCenters.data(), sizeof(FPoint) * NumCenter);
 }
 
