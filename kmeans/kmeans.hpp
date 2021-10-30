@@ -1,23 +1,9 @@
 #ifndef __KMEANS_HPP_
 #define __KMEANS_HPP_
 
-#include <cstdlib>
-#include <iostream>
+#include <iosfwd>
+#include <memory>
 #include <vector>
-
-#ifdef _MSC_VER
-#define FORCEINLINE __forceinline
-#define __builtin_memcpy memcpy
-#define __builtin_memset memset
-#else
-#define FORCEINLINE __attribute__((always_inline))
-#endif
-
-#ifdef NDEBUG
-#define check(...)
-#else
-#define check(Expr) (static_cast<bool>(Expr) || (::std::abort(), 0))
-#endif
 
 using index_t = int;
 
@@ -35,7 +21,7 @@ struct Point
 		double Y;
 	};
 
-	FORCEINLINE Point() noexcept = default;
+	Point() noexcept = default;
 	Point(int InX, int InY) : X(InX), Y(InY) {}
 
 	[[nodiscard]]
@@ -45,35 +31,22 @@ struct Point
 std::istream& operator>>(std::istream& LHS, Point& RHS);
 std::ostream& operator<<(std::ostream& LHS, const Point& RHS);
 
-namespace Solution
+struct FKMeans;
+
+struct FKMeansDeleter : std::default_delete<FKMeans>
 {
-	using FIndex = ::index_t;
-	using FPoint = ::Point;
-
-	template<class RElement>
-	using TVector = ::std::vector<RElement>;
-
-	static_assert(std::conjunction_v<std::is_trivial<FPoint>, std::is_standard_layout<FPoint>>);
-
-	struct FKMeans
-	{
-		TVector<FPoint> Points;
-		TVector<FPoint> Centers;
-		FIndex NumPoint;
-		FIndex NumCenter;
-
-		FKMeans(const TVector<FPoint>& InPoints, const TVector<FPoint>& InInitCenters);
-
-		TVector<FIndex> Run(int MaxIterations = 1000);
-	};
-}
+	void operator()(FKMeans* Obj) const noexcept;
+};
 
 // Public interface
-class Kmeans : private ::Solution::FKMeans
+class Kmeans
 {
 public:
-	using FKMeans::FKMeans;
-	using FKMeans::Run;
+	Kmeans(const std::vector<Point>& InPoints, const std::vector<Point>& InInitCenters);
+	std::vector<index_t> Run(int MaxIterations = 1000);
+
+private:
+	std::unique_ptr<FKMeans, FKMeansDeleter> Impl;
 };
 
 #endif // __KMEANS_HPP_
