@@ -26,6 +26,7 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #define USE_CHECK 1
 #define USE_PERF 1
 
+#define USE_OMP 1
 #define USE_SIMD 0
 #define USE_FMA 0
 
@@ -252,6 +253,9 @@ AttrPerf
 inline void UpdateAssignment(FIndex* Restrict Assignment, const FPointStore* Restrict Points, const FPoint* Restrict Centers, FIndex NumPoint, FIndex NumCenter)
 {
 #if !USE_SIMD
+#if USE_OMP
+	#pragma omp parallel for
+#endif
 	for (FIndex PointId = 0; PointId < NumPoint; ++PointId)
 	{
 		const FPoint& Point = Points[PointId];
