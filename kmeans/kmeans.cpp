@@ -26,14 +26,15 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #define USE_CHECK 1
 #define USE_PERF 1
 
-#define USE_OMP 1
+#define USE_OMP 0
 #define USE_SIMD 1
 
-#define USE_SIMD_OPERATOR           (1 && USE_SIMD)
-#define USE_SIMD_DISTANCE           (1 && USE_SIMD)
-#define USE_SIMD_UPDATE_ASSIGNMENT  (0 && USE_SIMD)
-#define USE_SIMD_UPDATE_CENTER      (0 && USE_SIMD)
-#define USE_SIMD_FMA                (0 && USE_SIMD)
+#define USE_SIMD_OPERATOR            (1 && USE_SIMD)
+#define USE_SIMD_DISTANCE            (1 && USE_SIMD)
+#define USE_SIMD_UPDATE_ASSIGNMENT   (1 && USE_SIMD)
+#define USE_SIMD_UPDATE_CENTER       (1 && USE_SIMD)
+#define USE_SIMD_FINALIZE_ASSIGNMENT (1 && USE_SIMD)
+#define USE_SIMD_FMA                 (0 && USE_SIMD)
 
 #ifdef _MSC_VER
 #define AttrForceInline __forceinline
@@ -256,14 +257,14 @@ struct FKMeans
 	FIndex NumPoint;
 	FIndex NumCenter;
 
-	FKMeans(const TVector<FPoint>& InPoints, const TVector<FPoint>& InInitCenters);
+	FKMeans(const TVector<FPoint>& InPoints, const TVector<FPoint>& InInitCenters) noexcept;
 
-	~FKMeans();
+	~FKMeans() noexcept;
 
 	TVector<FIndex> Run(int NumIteration = 1000);
 };
 
-inline FKMeans::FKMeans(const TVector<FPoint>& InPoints, const TVector<FPoint>& InInitCenters)
+inline FKMeans::FKMeans(const TVector<FPoint>& InPoints, const TVector<FPoint>& InInitCenters) noexcept
 	: NumPoint(static_cast<FIndex>(InPoints.size()))
 	, NumCenter(static_cast<FIndex>(InInitCenters.size()))
 {
@@ -277,7 +278,7 @@ inline FKMeans::FKMeans(const TVector<FPoint>& InPoints, const TVector<FPoint>& 
 	BuiltinMemCpy(Centers, InInitCenters.data(), sizeof(FPoint) * NumCenter);
 }
 
-FKMeans::~FKMeans()
+FKMeans::~FKMeans() noexcept
 {
 	FreeArray(Points);
 	FreeArray(Centers);
@@ -287,12 +288,12 @@ FKMeans::~FKMeans()
 }
 
 AttrPerf
-inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict Points, const FPoint* Restrict Centers, FIndex NumPoint, FIndex NumCenter)
+inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict Points, const FPoint* Restrict Centers, FIndex NumPoint, FIndex NumCenter) noexcept
 {
 #if USE_SIMD_UPDATE_ASSIGNMENT
 	constexpr FIndex BatchSize = 8;
 
-	const FIndex NumPointForBatch = NumPoint & (BatchSize - 1);
+	const FIndex NumPointForBatch = NumPoint & ~(BatchSize - 1);
 
 	for (FIndex PointId = 0; PointId < NumPointForBatch; PointId += BatchSize)
 	{
@@ -328,7 +329,7 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 			const __m256 VCenterId = _mm256_castsi256_ps(_mm256_set1_epi32(CenterId));
 			VAssign04261537 = _mm256_blendv_ps(VAssign04261537, VCenterId, VCmp04261537);
 		}
-		_mm256_store_ps(AssumeYmmAligned(reinterpret_cast<float*>(Assignment)), VAssign04261537);
+		_mm256_store_ps(AssumeYmmAligned(reinterpret_cast<float*>(Assignment + PointId)), VAssign04261537);
 	}
 
 	for (FIndex PointId = NumPointForBatch; PointId < NumPoint; ++PointId)
@@ -373,19 +374,57 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 }
 
 AttrPerf
-inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter)
+inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter) noexcept
 {
 #if USE_SIMD_UPDATE_CENTER
+	BuiltinMemSet(Centers, 0, sizeof(FPoint) * NumCenter);
+	BuiltinMemSet(PointCount, 0, sizeof(FIndex) * NumCenter);
+
+	constexpr FIndex BatchSize = 8;
+
+	const FIndex NumPointForBatch = NumPoint & ~(BatchSize - 1);
+
+	for (FIndex PointId = 0; PointId < NumPointForBatch; PointId += BatchSize)
+	{
+		const FIndex SubAssign[8]
+		{
+			Assignment[PointId + 0],
+			Assignment[PointId + 4],
+			Assignment[PointId + 2],
+			Assignment[PointId + 6],
+			Assignment[PointId + 1],
+			Assignment[PointId + 5],
+			Assignment[PointId + 3],
+			Assignment[PointId + 7],
+		};
+		for (FIndex SubPointId = 0; SubPointId < BatchSize; ++SubPointId)
+		{
+			const FIndex CenterId = SubAssign[SubPointId];
+			Centers[CenterId] += Points[PointId + SubPointId];
+			++PointCount[CenterId];
+		}
+	}
+
+	for (FIndex PointId = NumPointForBatch; PointId < NumPoint; ++PointId)
+	{
+		const FIndex CenterId = Assignment[PointId];
+		Centers[CenterId] += Points[PointId];
+		++PointCount[CenterId];
+	}
+
+	for (FIndex CenterId = 0; CenterId < NumCenter; ++CenterId)
+	{
+		Centers[CenterId] /= PointCount[CenterId];
+	}
 #else
 	BuiltinMemSet(Centers, 0, sizeof(FPoint) * NumCenter);
 	BuiltinMemSet(PointCount, 0, sizeof(FIndex) * NumCenter);
 
-	// TODO: Points is reordered, handle this
-	for (FIndex PointerId = 0; PointerId < NumPoint; ++PointerId)
+	for (FIndex PointId = 0; PointId < NumPoint; ++PointId)
 	{
-		const FIndex CenterId = Assignment[PointerId];
-		Centers[CenterId] += Points[PointerId];
-		PointCount[CenterId]++;
+		const FIndex CenterId = Assignment[PointId];
+		Centers[CenterId] += Points[PointId];
+		++PointCount[CenterId];
 	}
 
 	for (FIndex CenterId = 0; CenterId < NumCenter; ++CenterId)
@@ -393,6 +432,27 @@ inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount,
 		Centers[CenterId] /= PointCount[CenterId];
 	}
 #endif
+}
+
+AttrPerf
+inline TVector<FIndex> FinalizeAssignment(FIndex* Restrict Assignment, FIndex NumPoint) noexcept
+{
+#if USE_SIMD_FINALIZE_ASSIGNMENT
+	constexpr FIndex BatchSize = 8;
+
+	const FIndex NumPointForBatch = NumPoint & ~(BatchSize - 1);
+
+	const __m256i VPerm = _mm256_set_epi32(7, 3, 5, 1, 6, 2, 4, 0);
+
+	for (FIndex PointId = 0; PointId < NumPointForBatch; PointId += BatchSize)
+	{
+		const __m256 VAssign04261537 = _mm256_load_ps(AssumeYmmAligned(reinterpret_cast<float*>(Assignment + PointId)));
+		const __m256 VResult01234567 = _mm256_permutevar8x32_ps(VAssign04261537, VPerm);
+		_mm256_store_ps(AssumeYmmAligned(reinterpret_cast<float*>(Assignment + PointId)), VResult01234567);
+	}
+#endif
+
+	return {Assignment, Assignment + NumPoint};
 }
 
 TVector<FIndex> FKMeans::Run(int NumIteration)
@@ -425,7 +485,7 @@ TVector<FIndex> FKMeans::Run(int NumIteration)
 
 JConverge:
 	std::cout << "Finished in " << IterationId << " iterations.\n";
-	return {Assignment, Assignment + NumPoint};
+	return FinalizeAssignment(Assignment, NumPoint);
 }
 
 // Public interface
