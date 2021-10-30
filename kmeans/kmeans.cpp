@@ -253,13 +253,36 @@ inline void UpdateAssignment(FIndex* __restrict Assignment, const FPointStore* _
 #endif
 }
 
+inline void UpdateCenters(FPoint* __restrict Centers, FIndex* __restrict PointCount, const FPointStore* __restrict Points, const FIndex* __restrict Assignment, FIndex NumPoint, FIndex NumCenter)
+{
+#if !USE_SIMD
+	__builtin_memset(Centers, 0, sizeof(FPoint) * NumCenter);
+	__builtin_memset(PointCount, 0, sizeof(FIndex) * NumCenter);
+
+	// TODO: Points is reordered, handle this
+	for (FIndex PointerId = 0; PointerId < NumPoint; ++PointerId)
+	{
+		const FIndex CenterId = Assignment[PointerId];
+		Centers[CenterId].X += Points[PointerId].X;
+		Centers[CenterId].Y += Points[PointerId].Y;
+		PointCount[CenterId]++;
+	}
+
+	for (FIndex CenterId = 0; CenterId < NumCenter; ++CenterId)
+	{
+		Centers[CenterId].X /= PointCount[CenterId];
+		Centers[CenterId].Y /= PointCount[CenterId];
+	}
+#endif
+}
+
 TVector<FIndex> FKMeans::Run(int NumIteration)
 {
 	using std::swap;
 
 	// The return vector
 	TVector<FIndex> Assignment(NumPoint);
-	TVector<FIndex> AssignmentBak(NumPoint);
+	TVector<FIndex> OldAssignment(NumPoint);
 
 	int IterationId = 0;
 	std::cout << "Running kmeans with num points = " << NumPoint
@@ -273,30 +296,14 @@ TVector<FIndex> FKMeans::Run(int NumIteration)
 
 		UpdateAssignment(Assignment.data(), Points, Centers.data(), NumPoint, NumCenter);
 
-		if (!__builtin_memcmp(Assignment.data(), AssignmentBak.data(), sizeof(FIndex) * NumPoint))
+		if (!__builtin_memcmp(Assignment.data(), OldAssignment.data(), sizeof(FIndex) * NumPoint))
 		{
 			goto JConverge;
 		}
 
-		__builtin_memset(Centers.data(), 0, sizeof(FPoint) * NumCenter);
-		__builtin_memset(PointCount.data(), 0, sizeof(FIndex) * NumCenter);
+		UpdateCenters(Centers.data(), PointCount.data(), Points, Assignment.data(), NumPoint, NumCenter);
 
-		// TODO: Points is reordered, handle this
-		for (FIndex PointerId = 0; PointerId < NumPoint; ++PointerId)
-		{
-			const FIndex CenterId = Assignment[PointerId];
-			Centers[CenterId].X += Points[PointerId].X;
-			Centers[CenterId].Y += Points[PointerId].Y;
-			PointCount[CenterId]++;
-		}
-
-		for (FIndex CenterId = 0; CenterId < NumCenter; ++CenterId)
-		{
-			Centers[CenterId].X /= PointCount[CenterId];
-			Centers[CenterId].Y /= PointCount[CenterId];
-		}
-
-		swap(Assignment, AssignmentBak);
+		swap(Assignment, OldAssignment);
 	}
 
 JConverge:
