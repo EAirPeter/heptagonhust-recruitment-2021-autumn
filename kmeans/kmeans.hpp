@@ -22,7 +22,7 @@ struct Point
 	};
 
 	Point() noexcept = default;
-	Point(int InX, int InY) : X(InX), Y(InY) {}
+	constexpr Point(double InX, double InY) noexcept : X(InX), Y(InY) {}
 
 	[[nodiscard]]
 	double Distance(const Point& Other) const noexcept;

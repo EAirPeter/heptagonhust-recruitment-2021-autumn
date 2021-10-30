@@ -27,25 +27,33 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #define USE_PERF 1
 
 #define USE_OMP 1
-#define USE_SIMD 0
-#define USE_FMA 0
+#define USE_SIMD 1
+
+#define USE_SIMD_OPERATOR           (1 && USE_SIMD)
+#define USE_SIMD_DISTANCE           (1 && USE_SIMD)
+#define USE_SIMD_UPDATE_ASSIGNMENT  (0 && USE_SIMD)
+#define USE_SIMD_UPDATE_CENTER      (0 && USE_SIMD)
+#define USE_SIMD_TRANSPOSE          (0 && USE_SIMD)
+#define USE_SIMD_FMA                (0 && USE_SIMD)
 
 #ifdef _MSC_VER
 #define AttrForceInline __forceinline
 #define AttrNoInline __declspec(noinline)
+#define VectorCall __vectorcall
 #define Restrict __restrict
 #define BuiltinMemCmp __builtin_memcmp
 #define BuiltinMemCpy memcpy
 #define BuiltinMemSet memset
-#define AssumeAligned __builtin_assume_aligned
+#define BuiltinAssumeAligned __builtin_assume_aligned
 #else
 #define AttrForceInline __attribute__((always_inline))
 #define AttrNoInline __attribute__((noinline))
+#define VectorCall
 #define Restrict __restrict__
 #define BuiltinMemCmp __builtin_memcmp
 #define BuiltinMemCpy __builtin_memcpy
 #define BuiltinMemSet __builtin_memset
-#define AssumeAligned __builtin_assume_aligned
+#define BuiltinAssumeAligned __builtin_assume_aligned
 #endif
 
 #if USE_CHECK
@@ -63,8 +71,9 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #if USE_SIMD
 #include <immintrin.h>
 
-constexpr std::size_t VecAlign = 64;
+constexpr std::size_t VecAlignment = 64;
 
+#define AssumeVecAligned(Ptr) static_cast<decltype(Ptr)>(BuiltinAssumeAligned(Ptr, VecAlignment))
 #endif
 
 using FIndex = ::index_t;
@@ -72,19 +81,147 @@ using FPoint = ::Point;
 
 static_assert(std::conjunction_v<std::is_trivial<FPoint>, std::is_standard_layout<FPoint>>);
 
-#if USE_SIMD
-using FPointStore = double;
-#else
-using FPointStore = FPoint;
-#endif
-
 template<class RElement>
 using TVector = ::std::vector<RElement>;
 
+#if USE_SIMD
+
+AttrForceInline
+inline __m128d VectorCall
+Load1(const FPoint& Restrict Point) noexcept
+{
+	return _mm_load_pd(AssumeVecAligned(reinterpret_cast<const double*>(&Point)));
+}
+
+AttrForceInline
+inline __m128d VectorCall
+Load1(const FPoint* Restrict Point) noexcept
+{
+	return _mm_load_pd(AssumeVecAligned(reinterpret_cast<const double*>(Point)));
+}
+
+AttrForceInline
+inline __m256d VectorCall
+Load2(const FPoint* Restrict Point) noexcept
+{
+	return _mm256_load_pd(AssumeVecAligned(reinterpret_cast<const double*>(Point)));
+}
+
+AttrForceInline
+inline void VectorCall
+Store1(FPoint& Restrict Point, __m128d Vector) noexcept
+{
+	_mm_store_pd(AssumeVecAligned(reinterpret_cast<double*>(&Point)), Vector);
+}
+
+AttrForceInline
+inline void VectorCall
+Store1(FPoint* Restrict Point, __m128d Vector) noexcept
+{
+	_mm_store_pd(AssumeVecAligned(reinterpret_cast<double*>(Point)), Vector);
+}
+
+AttrForceInline
+inline void VectorCall
+Store2(FPoint* Restrict Point, __m256d Vector) noexcept
+{
+	_mm256_store_pd(AssumeVecAligned(reinterpret_cast<double*>(Point)), Vector);
+}
+
+#endif
+
+#if USE_SIMD_OPERATOR
+inline FPoint operator+(const FPoint& LHS, const FPoint& RHS) noexcept
+{
+	alignas(VecAlignment) FPoint Result;
+	Store1(Result, _mm_add_pd(Load1(LHS), Load1(RHS)));
+	return Result;
+}
+inline FPoint operator-(const FPoint& LHS, const FPoint& RHS) noexcept
+{
+	alignas(VecAlignment) FPoint Result;
+	Store1(Result, _mm_sub_pd(Load1(LHS), Load1(RHS)));
+	return Result;
+}
+inline FPoint& operator+=(FPoint& LHS, const FPoint& RHS) noexcept
+{
+	Store1(LHS, _mm_add_pd(Load1(LHS), Load1(RHS)));
+	return LHS;
+}
+inline FPoint& operator-=(FPoint& LHS, const FPoint& RHS) noexcept
+{
+	Store1(LHS, _mm_sub_pd(Load1(LHS), Load1(RHS)));
+	return LHS;
+}
+inline FPoint& operator*=(FPoint& LHS, double RHS) noexcept
+{
+	Store1(LHS, _mm_mul_pd(Load1(LHS), _mm_set1_pd(RHS)));
+	return LHS;
+}
+inline FPoint& operator/=(FPoint& LHS, double RHS) noexcept
+{
+	Store1(LHS, _mm_div_pd(Load1(LHS), _mm_set1_pd(RHS)));
+	return LHS;
+}
+#else
+inline FPoint operator+(const FPoint& LHS, const FPoint& RHS) noexcept
+{
+	return {LHS.X + RHS.X, LHS.Y + RHS.Y};
+}
+inline FPoint operator-(const FPoint& LHS, const FPoint& RHS) noexcept
+{
+	return {LHS.X - RHS.X, LHS.Y - RHS.Y};
+}
+inline FPoint& operator+=(FPoint& LHS, const FPoint& RHS) noexcept
+{
+	LHS.X += RHS.X;
+	LHS.Y += RHS.Y;
+	return LHS;
+}
+inline FPoint& operator-=(FPoint& LHS, const FPoint& RHS) noexcept
+{
+	LHS.X -= RHS.X;
+	LHS.Y -= RHS.Y;
+	return LHS;
+}
+inline FPoint& operator*=(FPoint& LHS, double RHS) noexcept
+{
+	LHS.X *= RHS;
+	LHS.Y *= RHS;
+	return LHS;
+}
+inline FPoint& operator/=(FPoint& LHS, double RHS) noexcept
+{
+	LHS.X /= RHS;
+	LHS.Y /= RHS;
+	return LHS;
+}
+#endif
+
+#if USE_SIMD_DISTANCE
+inline double GetDistance(const FPoint& Restrict LHS, const FPoint& Restrict RHS) noexcept
+{
+	const __m128d VL = Load1(LHS);
+	const __m128d VR = Load1(RHS);
+	const __m128d VDiff = _mm_sub_pd(VL, VR);
+	const __m128d VMul = _mm_mul_pd(VDiff, VDiff);
+	const __m128d VMulY = _mm_unpackhi_pd(VMul, VMul);
+	const __m128d VRes = _mm_add_sd(VMul, VMulY);
+	return _mm_cvtsd_f64(VRes);
+}
+#else
+inline double GetDistance(const FPoint& Restrict LHS, const FPoint& Restrict RHS) noexcept
+{
+	const double A = LHS.X - RHS.X;
+	const double B = LHS.Y - RHS.Y;
+	return A * A + B * B;
+}
+#endif
+
 struct FKMeans
 {
-	FPointStore* Points = nullptr;
-	TVector<FPoint> Centers;
+	FPoint* Points = nullptr;
+	FPoint* Centers = nullptr;
 	FIndex NumPoint;
 	FIndex NumCenter;
 
@@ -95,12 +232,12 @@ struct FKMeans
 	TVector<FIndex> Run(int NumIteration = 1000);
 };
 
-#if USE_SIMD
+#if USE_SIMD_TRANSPOSE
 // 0x0y1x1y2x2y3x3y -> 0x2x1x3x 0y2y1y3y
 // Last: 0x0y1x1y2x2y -> 0x0y1x1y2x2y
 inline void SimdTranspose(double* Restrict Dst, const double* Restrict Src, FIndex NumPoint)
 {
-	Dst = static_cast<double*>(AssumeAligned(Dst, VecAlign));
+	Dst = static_cast<double*>(AssumeVecAligned(Dst));
 	while (NumPoint >= 4)
 	{
 		const __m256d A = _mm256_load_pd(Src);
@@ -113,16 +250,19 @@ inline void SimdTranspose(double* Restrict Dst, const double* Restrict Src, FInd
 		Src += 8;
 		Dst += 8;
 	}
-	Memcpy(Dst, Src, sizeof(double) * NumPoint);
+	BuiltinMemCpy(Dst, Src, sizeof(double) * NumPoint);
 }
+#endif
 
+#if USE_SIMD_UPDATE_ASSIGNMENT
+#if USE_SIMD_TRANSPOSE
 // 0x2x1x3x 0y2y1y3y 4x6x5x7x 4y6y5y7y -> 0213 4657 -> 0415 2637
 // 0x2x1x3x 0y2y1y3y -> 02 13 -> 0123
 // 0x0y1x1y2x2y -> 012
 inline void SimdUpdateAssignment(FIndex* Restrict Assignment, const double* Restrict Points, const FPoint* Centers, FIndex NumPoint, FIndex NumCenter)
 {
-	Assignment = static_cast<FIndex*>(AssumeAligned(Assignment, VecAlign));
-	Points = static_cast<const double*>(AssumeAligned(Points, VecAlign));
+	Assignment = static_cast<FIndex*>(AssumeVecAligned(Assignment));
+	Points = static_cast<const double*>(AssumeVecAligned(Points));
 
 	while (NumPoint >= 8)
 	{
@@ -142,7 +282,7 @@ inline void SimdUpdateAssignment(FIndex* Restrict Assignment, const double* Rest
 			const __m256d U0 = _mm256_sub_pd(Py0, Cy);
 			const __m256d U1 = _mm256_sub_pd(Py1, Cy);
 			const __m256 AsgI = _mm256_castsi256_ps(_mm256_set1_epi32(CenterId));
-#if USE_FMA
+#if USE_SIMD_FMA
 			T0 = _mm256_fmadd_pd(T0, T0, _mm256_mul_pd(U0, U0));
 			T1 = _mm256_fmadd_pd(T1, T1, _mm256_mul_pd(U1, U1));
 #else
@@ -175,7 +315,7 @@ inline void SimdUpdateAssignment(FIndex* Restrict Assignment, const double* Rest
 			__m256d T0 = _mm256_sub_pd(Px0, Cx);
 			const __m256d U0 = _mm256_sub_pd(Py0, Cy);
 			const __m128 AsgI = _mm_castsi128_ps(_mm_set1_epi32(CenterId));
-#if USE_FMA
+#if USE_SIMD_FMA
 			T0 = _mm256_fmadd_pd(T0, T0, _mm256_mul_pd(U0, U0));
 #else
 			T0 = _mm256_add_pd(_mm256_mul_pd(T0, T0), _mm256_mul_pd(U0, U0));
@@ -212,12 +352,30 @@ inline void SimdUpdateAssignment(FIndex* Restrict Assignment, const double* Rest
 		++Assignment;
 	}
 }
+#else
+inline void SimdUpdateAssignment(FIndex* Restrict Assignment, const double* Restrict Points, const FPoint* Centers, FIndex NumPoint, FIndex NumCenter)
+{
+	Assignment = static_cast<FIndex*>(AssumeVecAligned(Assignment, VecAlignment));
+	Points = static_cast<const double*>(AssumeVecAligned(Points, VecAlignment));
+
+	while (NumPoint >= 2)
+	{
+		const __m256d P = _mm256_load_pd(Points);
+		for (FIndex CenterId = 0; CenterId < NumCenter; ++CenterId)
+		{
+		}
+		NumPoint -= 2;
+		Points += 4;
+		Assignment += 2;
+	}
+}
+#endif
 #endif
 
 AttrPerf
-inline void InitCopy(FPointStore* Restrict Dst, const FPoint* Restrict Src, FIndex NumPoint)
+inline void InitCopy(FPoint* Restrict Dst, const FPoint* Restrict Src, FIndex NumPoint)
 {
-#if !USE_SIMD
+#if !USE_SIMD_TRANSPOSE
 	BuiltinMemCpy(Dst, Src, sizeof(FPoint) * NumPoint);
 #else
 	SimdTranspose(Dst, reinterpret_cast<const double*>(Src), NumPoint);
@@ -225,34 +383,42 @@ inline void InitCopy(FPointStore* Restrict Dst, const FPoint* Restrict Src, FInd
 }
 
 inline FKMeans::FKMeans(const TVector<FPoint>& InPoints, const TVector<FPoint>& InInitCenters)
-	: Centers(InInitCenters)
-	, NumPoint(static_cast<FIndex>(InPoints.size()))
+	: NumPoint(static_cast<FIndex>(InPoints.size()))
 	, NumCenter(static_cast<FIndex>(InInitCenters.size()))
 {
 #if !USE_SIMD
-	Points = new FPoint[NumPoint];
+	Points = new(std::nothrow) FPoint[NumPoint];
+	Centers = new(std::nothrow) FPoint[NumCenter];
 #else
-	Points = static_cast<double*>(operator new(sizeof(FPoint) * NumPoint, static_cast<std::align_val_t>(VecAlign), std::nothrow));
-	check(!(reinterpret_cast<std::uintptr_t>(Points) & (VecAlign - 1)));
+	//Points = new(static_cast<std::align_val_t>(VecAlignment), std::nothrow) FPoint[NumPoint];
+	//Centers = new(static_cast<std::align_val_t>(VecAlignment), std::nothrow) FPoint[NumCenter];
+	Points = static_cast<FPoint*>(operator new(sizeof(FPoint) * NumPoint, static_cast<std::align_val_t>(VecAlignment), std::nothrow));
+	Centers = static_cast<FPoint*>(operator new(sizeof(FPoint) * NumCenter, static_cast<std::align_val_t>(VecAlignment), std::nothrow));
+	check(!(reinterpret_cast<std::uintptr_t>(Points) & (VecAlignment - 1)));
+	check(!(reinterpret_cast<std::uintptr_t>(Centers) & (VecAlignment - 1)));
 #endif
 
 	check(Points);
+	check(Centers);
 	InitCopy(Points, InPoints.data(), NumPoint);
+	BuiltinMemCpy(Centers, InInitCenters.data(), sizeof(FPoint) * NumCenter);
 }
 
 FKMeans::~FKMeans()
 {
 #if !USE_SIMD
 	delete[] Points;
+	delete[] Centers;
 #else
-	operator delete(Points, static_cast<std::align_val_t>(VecAlign), std::nothrow);
+	operator delete(Points, static_cast<std::align_val_t>(VecAlignment), std::nothrow);
+	operator delete(Centers, static_cast<std::align_val_t>(VecAlignment), std::nothrow);
 #endif
 }
 
 AttrPerf
-inline void UpdateAssignment(FIndex* Restrict Assignment, const FPointStore* Restrict Points, const FPoint* Restrict Centers, FIndex NumPoint, FIndex NumCenter)
+inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict Points, const FPoint* Restrict Centers, FIndex NumPoint, FIndex NumCenter)
 {
-#if !USE_SIMD
+#if !USE_SIMD_UPDATE_ASSIGNMENT
 #if USE_OMP
 	#pragma omp parallel for
 #endif
@@ -264,7 +430,7 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPointStore* Res
 		for (int CenterId = 0; CenterId < NumCenter; ++CenterId)
 		{
 			const FPoint& Center = Centers[CenterId];
-			const double Distance = Point.Distance(Center);
+			const double Distance = GetDistance(Point, Center);
 			if (Distance < MinDistance)
 			{
 				MinDistance = Distance;
@@ -279,9 +445,9 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPointStore* Res
 }
 
 AttrPerf
-inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount, const FPointStore* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter)
+inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter)
 {
-#if !USE_SIMD
+#if !USE_SIMD_UPDATE_CENTER
 	BuiltinMemSet(Centers, 0, sizeof(FPoint) * NumCenter);
 	BuiltinMemSet(PointCount, 0, sizeof(FIndex) * NumCenter);
 
@@ -289,15 +455,13 @@ inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount,
 	for (FIndex PointerId = 0; PointerId < NumPoint; ++PointerId)
 	{
 		const FIndex CenterId = Assignment[PointerId];
-		Centers[CenterId].X += Points[PointerId].X;
-		Centers[CenterId].Y += Points[PointerId].Y;
+		Centers[CenterId] += Points[PointerId];
 		PointCount[CenterId]++;
 	}
 
 	for (FIndex CenterId = 0; CenterId < NumCenter; ++CenterId)
 	{
-		Centers[CenterId].X /= PointCount[CenterId];
-		Centers[CenterId].Y /= PointCount[CenterId];
+		Centers[CenterId] /= PointCount[CenterId];
 	}
 #endif
 }
@@ -320,14 +484,14 @@ TVector<FIndex> FKMeans::Run(int NumIteration)
 	{
 		++IterationId;
 
-		UpdateAssignment(Assignment.data(), Points, Centers.data(), NumPoint, NumCenter);
+		UpdateAssignment(Assignment.data(), Points, Centers, NumPoint, NumCenter);
 
 		if (!BuiltinMemCmp(Assignment.data(), OldAssignment.data(), sizeof(FIndex) * NumPoint))
 		{
 			goto JConverge;
 		}
 
-		UpdateCenters(Centers.data(), PointCount.data(), Points, Assignment.data(), NumPoint, NumCenter);
+		UpdateCenters(Centers, PointCount.data(), Points, Assignment.data(), NumPoint, NumCenter);
 
 		swap(Assignment, OldAssignment);
 	}
