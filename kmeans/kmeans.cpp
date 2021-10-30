@@ -33,14 +33,18 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #define AttrForceInline __forceinline
 #define AttrNoInline __declspec(noinline)
 #define Restrict __restrict
+#define BuiltinMemCmp __builtin_memcmp
 #define BuiltinMemCpy memcpy
 #define BuiltinMemSet memset
+#define AssumeAligned __builtin_assume_aligned
 #else
 #define AttrForceInline __attribute__((always_inline))
 #define AttrNoInline __attribute__((noinline))
 #define Restrict __restrict__
+#define BuiltinMemCmp __builtin_memcmp
 #define BuiltinMemCpy __builtin_memcpy
 #define BuiltinMemSet __builtin_memset
+#define AssumeAligned __builtin_assume_aligned
 #endif
 
 #if USE_CHECK
@@ -68,7 +72,7 @@ using FPoint = ::Point;
 static_assert(std::conjunction_v<std::is_trivial<FPoint>, std::is_standard_layout<FPoint>>);
 
 #if USE_SIMD
-using FPointArray = double;
+using FPointStore = double;
 #else
 using FPointStore = FPoint;
 #endif
@@ -95,7 +99,7 @@ struct FKMeans
 // Last: 0x0y1x1y2x2y -> 0x0y1x1y2x2y
 inline void SimdTranspose(double* Restrict Dst, const double* Restrict Src, FIndex NumPoint)
 {
-	Dst = static_cast<double*>(__builtin_assume_aligned(Dst, VecAlign));
+	Dst = static_cast<double*>(AssumeAligned(Dst, VecAlign));
 	while (NumPoint >= 4)
 	{
 		const __m256d A = _mm256_load_pd(Src);
@@ -116,8 +120,8 @@ inline void SimdTranspose(double* Restrict Dst, const double* Restrict Src, FInd
 // 0x0y1x1y2x2y -> 012
 inline void SimdUpdateAssignment(FIndex* Restrict Assignment, const double* Restrict Points, const FPoint* Centers, FIndex NumPoint, FIndex NumCenter)
 {
-	Assignment = static_cast<FIndex*>(__builtin_assume_aligned(Assignment, VecAlign));
-	Points = static_cast<const double*>(__builtin_assume_aligned(Points, VecAlign));
+	Assignment = static_cast<FIndex*>(AssumeAligned(Assignment, VecAlign));
+	Points = static_cast<const double*>(AssumeAligned(Points, VecAlign));
 
 	while (NumPoint >= 8)
 	{
@@ -314,7 +318,7 @@ TVector<FIndex> FKMeans::Run(int NumIteration)
 
 		UpdateAssignment(Assignment.data(), Points, Centers.data(), NumPoint, NumCenter);
 
-		if (!__builtin_memcmp(Assignment.data(), OldAssignment.data(), sizeof(FIndex) * NumPoint))
+		if (!BuiltinMemCmp(Assignment.data(), OldAssignment.data(), sizeof(FIndex) * NumPoint))
 		{
 			goto JConverge;
 		}
