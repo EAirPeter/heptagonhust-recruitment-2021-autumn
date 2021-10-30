@@ -4,7 +4,7 @@
 #include <iostream>
 #include <limits>
 
-double Point::Distance(const Point& Other) const noexcept
+inline double Point::Distance(const Point& Other) const noexcept
 {
 	const double A = X - Other.X;
 	const double B = Y - Other.Y;
@@ -23,21 +23,36 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 
 //// START
 
+#define USE_CHECK 1
+#define USE_PERF 1
+
 #define USE_SIMD 0
 #define USE_FMA 0
 
 #ifdef _MSC_VER
-#define __builtin_memcpy memcpy
-#define __builtin_memset memset
+#define AttrForceInline __forceinline
+#define AttrNoInline __declspec(noinline)
+#define Restrict __restrict
+#define BuiltinMemCpy memcpy
+#define BuiltinMemSet memset
 #else
-#define __forceinline __attribute__((always_inline))
-#define __restrict __restrict__
+#define AttrForceInline __attribute__((always_inline))
+#define AttrNoInline __attribute__((noinline))
+#define Restrict __restrict__
+#define BuiltinMemCpy __builtin_memcpy
+#define BuiltinMemSet __builtin_memset
 #endif
 
-#ifdef NDEBUG
-#define check(...)
-#else
+#if USE_CHECK
 #define check(Expr) (static_cast<bool>(Expr) || (::std::abort(), 0))
+#else
+#define check(...)
+#endif
+
+#if USE_PERF
+#define AttrPerf AttrNoInline
+#else
+#define AttrPerf
 #endif
 
 #if USE_SIMD
@@ -78,7 +93,7 @@ struct FKMeans
 #if USE_SIMD
 // 0x0y1x1y2x2y3x3y -> 0x2x1x3x 0y2y1y3y
 // Last: 0x0y1x1y2x2y -> 0x0y1x1y2x2y
-void SimdTranspose(double* __restrict Dst, const double* __restrict Src, FIndex NumPoint)
+inline void SimdTranspose(double* Restrict Dst, const double* Restrict Src, FIndex NumPoint)
 {
 	Dst = static_cast<double*>(__builtin_assume_aligned(Dst, VecAlign));
 	while (NumPoint >= 4)
@@ -93,13 +108,13 @@ void SimdTranspose(double* __restrict Dst, const double* __restrict Src, FIndex 
 		Src += 8;
 		Dst += 8;
 	}
-	__builtin_memcpy(Dst, Src, sizeof(double) * NumPoint);
+	Memcpy(Dst, Src, sizeof(double) * NumPoint);
 }
 
 // 0x2x1x3x 0y2y1y3y 4x6x5x7x 4y6y5y7y -> 0213 4657 -> 0415 2637
 // 0x2x1x3x 0y2y1y3y -> 02 13 -> 0123
 // 0x0y1x1y2x2y -> 012
-void SimdUpdateAssignment(FIndex* __restrict Assignment, const double* __restrict Points, const FPoint* Centers, FIndex NumPoint, FIndex NumCenter)
+inline void SimdUpdateAssignment(FIndex* Restrict Assignment, const double* Restrict Points, const FPoint* Centers, FIndex NumPoint, FIndex NumCenter)
 {
 	Assignment = static_cast<FIndex*>(__builtin_assume_aligned(Assignment, VecAlign));
 	Points = static_cast<const double*>(__builtin_assume_aligned(Points, VecAlign));
@@ -194,10 +209,11 @@ void SimdUpdateAssignment(FIndex* __restrict Assignment, const double* __restric
 }
 #endif
 
-inline void InitCopy(FPointStore* __restrict Dst, const FPoint* __restrict Src, FIndex NumPoint)
+AttrPerf
+inline void InitCopy(FPointStore* Restrict Dst, const FPoint* Restrict Src, FIndex NumPoint)
 {
 #if !USE_SIMD
-	__builtin_memcpy(Dst, Src, sizeof(FPoint) * NumPoint);
+	BuiltinMemCpy(Dst, Src, sizeof(FPoint) * NumPoint);
 #else
 	SimdTranspose(Dst, reinterpret_cast<const double*>(Src), NumPoint);
 #endif
@@ -211,7 +227,7 @@ inline FKMeans::FKMeans(const TVector<FPoint>& InPoints, const TVector<FPoint>& 
 #if !USE_SIMD
 	Points = new FPoint[NumPoint];
 #else
-	Points = static_cast<double*>(::operator new(sizeof(FPoint) * NumPoint, static_cast<std::align_val_t>(VecAlign), std::nothrow));
+	Points = static_cast<double*>(operator new(sizeof(FPoint) * NumPoint, static_cast<std::align_val_t>(VecAlign), std::nothrow));
 	check(!(reinterpret_cast<std::uintptr_t>(Points) & (VecAlign - 1)));
 #endif
 
@@ -224,11 +240,12 @@ FKMeans::~FKMeans()
 #if !USE_SIMD
 	delete[] Points;
 #else
-	::operator delete(Points, static_cast<std::align_val_t>(VecAlign), std::nothrow);
+	operator delete(Points, static_cast<std::align_val_t>(VecAlign), std::nothrow);
 #endif
 }
 
-inline void UpdateAssignment(FIndex* __restrict Assignment, const FPointStore* __restrict Points, const FPoint* __restrict Centers, FIndex NumPoint, FIndex NumCenter)
+AttrPerf
+inline void UpdateAssignment(FIndex* Restrict Assignment, const FPointStore* Restrict Points, const FPoint* Restrict Centers, FIndex NumPoint, FIndex NumCenter)
 {
 #if !USE_SIMD
 	for (FIndex PointId = 0; PointId < NumPoint; ++PointId)
@@ -253,11 +270,12 @@ inline void UpdateAssignment(FIndex* __restrict Assignment, const FPointStore* _
 #endif
 }
 
-inline void UpdateCenters(FPoint* __restrict Centers, FIndex* __restrict PointCount, const FPointStore* __restrict Points, const FIndex* __restrict Assignment, FIndex NumPoint, FIndex NumCenter)
+AttrPerf
+inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount, const FPointStore* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter)
 {
 #if !USE_SIMD
-	__builtin_memset(Centers, 0, sizeof(FPoint) * NumCenter);
-	__builtin_memset(PointCount, 0, sizeof(FIndex) * NumCenter);
+	BuiltinMemSet(Centers, 0, sizeof(FPoint) * NumCenter);
+	BuiltinMemSet(PointCount, 0, sizeof(FIndex) * NumCenter);
 
 	// TODO: Points is reordered, handle this
 	for (FIndex PointerId = 0; PointerId < NumPoint; ++PointerId)
