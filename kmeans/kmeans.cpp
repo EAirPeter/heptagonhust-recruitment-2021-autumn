@@ -35,6 +35,7 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #define USE_SIMD_UPDATE_CENTER       (1 && USE_SIMD)
 #define USE_SIMD_FINALIZE_ASSIGNMENT (1 && USE_SIMD)
 #define USE_SIMD_ASSIGNMENT_SWIZZLE  (0 && USE_SIMD)
+#define USE_SIMD_POINTS_SWIZZLE      (1 && USE_SIMD)
 #define USE_SIMD_FMA                 (0 && USE_SIMD)
 
 #ifdef _MSC_VER
@@ -309,11 +310,29 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 		const __m256d VPoint23 = Load2(Points + PointId + 2);
 		const __m256d VPoint45 = Load2(Points + PointId + 4);
 		const __m256d VPoint67 = Load2(Points + PointId + 6);
+#if USE_SIMD_POINTS_SWIZZLE
+		const __m256d VPointX0213 = _mm256_unpacklo_pd(VPoint01, VPoint23);
+		const __m256d VPointY0213 = _mm256_unpackhi_pd(VPoint01, VPoint23);
+		const __m256d VPointX4657 = _mm256_unpacklo_pd(VPoint45, VPoint67);
+		const __m256d VPointY4657 = _mm256_unpackhi_pd(VPoint45, VPoint67);
+#endif
 		__m256d VMinDis0213 = _mm256_set1_pd(std::numeric_limits<double>::max());
 		__m256d VMinDis4657 = _mm256_set1_pd(std::numeric_limits<double>::max());
 		__m256 VAssign04261537;
 		for (FIndex CenterId = 0; CenterId < NumCenter; ++CenterId)
 		{
+#if USE_SIMD_POINTS_SWIZZLE
+			const __m256d VCenterX = _mm256_broadcast_sd(&Centers[CenterId].X);
+			const __m256d VCenterY = _mm256_broadcast_sd(&Centers[CenterId].Y);
+			const __m256d VDiffX0213 = _mm256_sub_pd(VPointX0213, VCenterX);
+			const __m256d VDiffX4657 = _mm256_sub_pd(VPointX4657, VCenterX);
+			const __m256d VDiffY0213 = _mm256_sub_pd(VPointY0213, VCenterY);
+			const __m256d VDiffY4657 = _mm256_sub_pd(VPointY4657, VCenterY);
+			const __m256d VMulX0213 = _mm256_mul_pd(VDiffX0213, VDiffX0213);
+			const __m256d VMulX4657 = _mm256_mul_pd(VDiffX4657, VDiffX4657);
+			const __m256d VMulY0213 = _mm256_mul_pd(VDiffY0213, VDiffY0213);
+			const __m256d VMulY4657 = _mm256_mul_pd(VDiffY4657, VDiffY4657);
+#else
 			const __m256d VCenter = _mm256_broadcast_pd(AssumeXmmAligned(reinterpret_cast<const __m128d*>(&Centers[CenterId])));
 			const __m256d VDiff01 = _mm256_sub_pd(VPoint01, VCenter);
 			const __m256d VDiff23 = _mm256_sub_pd(VPoint23, VCenter);
@@ -327,6 +346,7 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 			const __m256d VMulX4657 = _mm256_unpacklo_pd(VMul45, VMul67);
 			const __m256d VMulY0213 = _mm256_unpackhi_pd(VMul01, VMul23);
 			const __m256d VMulY4657 = _mm256_unpackhi_pd(VMul45, VMul67);
+#endif
 			const __m256d VDis0213 = _mm256_add_pd(VMulX0213, VMulY0213);
 			const __m256d VDis4657 = _mm256_add_pd(VMulX4657, VMulY4657);
 			const __m256 VCmp0213 = _mm256_castpd_ps(_mm256_cmp_pd(VDis0213, VMinDis0213, _CMP_LT_OQ));
