@@ -26,17 +26,19 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #define USE_CHECK 1
 #define USE_PERF 1
 
-#define USE_OMP 1
+#define USE_OMP 0
 #define USE_SIMD 1
 
 #define USE_OMP_NUM_THREAD                 (1 && USE_OMP)
 #define USE_OMP_UPDATE_ASSIGNMENT          (1 && USE_OMP)
 #define USE_OMP_UPDATE_ASSIGNMENT_FINE     (1 && USE_OMP_UPDATE_ASSIGNMENT && USE_OMP_NUM_THREAD)
+#define USE_OMP_UPDATE_CENTER              (1 && USE_OMP_NUM_THREAD)
 
 #define USE_SIMD_OPERATOR                  (1 && USE_SIMD)
 #define USE_SIMD_DISTANCE                  (1 && USE_SIMD)
 #define USE_SIMD_UPDATE_ASSIGNMENT         (1 && USE_SIMD)
 #define USE_SIMD_ASSIGNMENT_SWIZZLE        (0 && USE_SIMD)
+#define USE_SIMD_CENTER_ID_ADD             (1 && USE_SIMD && !USE_OMP_UPDATE_ASSIGNMENT)
 #define USE_SIMD_POINTS_SWIZZLE            (1 && USE_SIMD)
 #define USE_SIMD_POINTS_SWIZZLE_AOT        (0 && USE_SIMD_POINTS_SWIZZLE)
 #define USE_SIMD_POINTS_SWIZZLE_AOT_COPY   (0 && USE_SIMD_POINTS_SWIZZLE_AOT)
@@ -385,6 +387,10 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 	const __m256i VPerm = _mm256_set_epi32(7, 3, 5, 1, 6, 2, 4, 0);
 #endif
 
+#if USE_SIMD_CENTER_ID_ADD
+	const __m256i VOne = _mm256_set1_epi32(1);
+#endif
+
 #if USE_OMP
 	#pragma omp parallel for
 #endif
@@ -410,6 +416,9 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 		__m256d VMinDis0213 = _mm256_set1_pd(std::numeric_limits<double>::max());
 		__m256d VMinDis4657 = _mm256_set1_pd(std::numeric_limits<double>::max());
 		__m256 VAssign04261537;
+#if USE_SIMD_CENTER_ID_ADD
+		__m256i VCenterId = _mm256_setzero_si256();
+#endif
 		for (FIndex CenterId = 0; CenterId < NumCenter; ++CenterId)
 		{
 #if USE_SIMD_POINTS_SWIZZLE
@@ -445,8 +454,13 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 			VMinDis0213 = _mm256_min_pd(VDis0213, VMinDis0213);
 			VMinDis4657 = _mm256_min_pd(VDis4657, VMinDis4657);
 			const __m256 VCmp04261537 = _mm256_blend_ps(VCmp0213, VCmp4657, 0b10101010);
+#if USE_SIMD_CENTER_ID_ADD
+			VAssign04261537 = _mm256_blendv_ps(VAssign04261537, _mm256_castsi256_ps(VCenterId), VCmp04261537);
+			VCenterId = _mm256_add_epi32(VCenterId, VOne);
+#else
 			const __m256 VCenterId = _mm256_castsi256_ps(_mm256_set1_epi32(CenterId));
 			VAssign04261537 = _mm256_blendv_ps(VAssign04261537, VCenterId, VCmp04261537);
+#endif
 		}
 #if USE_SIMD_ASSIGNMENT_SWIZZLE
 		_mm256_store_ps(AssumeYmmAligned(reinterpret_cast<float*>(Assignment + PointId)), VAssign04261537);
