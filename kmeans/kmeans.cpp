@@ -26,6 +26,7 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 
 #define USE_CHECK 1
 #define USE_PERF 1
+#define USE_STATS 1
 
 #define USE_OMP 1
 #define USE_SIMD 1
@@ -92,6 +93,77 @@ constexpr std::size_t VecAlignment = 64;
 #define AssumeXmmAligned(Ptr) static_cast<decltype(Ptr)>(BuiltinAssumeAligned(Ptr, XmmAlignment))
 #define AssumeYmmAligned(Ptr) static_cast<decltype(Ptr)>(BuiltinAssumeAligned(Ptr, YmmAlignment))
 #define AssumeVecAligned(Ptr) static_cast<decltype(Ptr)>(BuiltinAssumeAligned(Ptr, VecAlignment))
+#endif
+
+#if USE_STATS
+
+#include <atomic>
+#include <chrono>
+
+#define ALL_STATS(E) \
+	E(FKMeansConstructor) \
+	E(FKMeansRun) \
+	E(UpdateAssignment) \
+	E(UpdateCenters) \
+	E(CompareForQuit) \
+	E(ZeroCenterAndPointCount) \
+	E(FinalizeAssignment)
+
+namespace StatsImpl
+{
+	using std::chrono::high_resolution_clock;
+
+	enum class EStat
+	{
+#define STATS_DEF_ENUM(Stat) Stat,
+		ALL_STATS(STATS_DEF_ENUM)
+		Num
+	};
+
+	template<EStat Stat>
+	static std::atomic_int64_t GAccumulator;
+
+	template<EStat Stat>
+	struct TScopedStatTimer
+	{
+		high_resolution_clock::time_point Start;
+
+		TScopedStatTimer() noexcept
+			: Start(high_resolution_clock::now())
+		{
+		}
+
+		~TScopedStatTimer() noexcept
+		{
+			const high_resolution_clock::time_point End = high_resolution_clock::now();
+			const int64_t NumNanosecond = std::chrono::duration_cast<std::chrono::nanoseconds>(End - Start).count();
+			GAccumulator<Stat>.fetch_add(NumNanosecond, std::memory_order_relaxed);
+		}
+	};
+
+	void PrintStat(const char* Name, const std::atomic_int64_t& Counter)
+	{
+		const int64_t NumNanosecond = Counter.load(std::memory_order_consume);
+		const double NumMillisecond = static_cast<double>(NumNanosecond) * 0.000001;
+		std::cout << "[STAT][" << Name << "] " << NumMillisecond << " ms\n";
+	}
+
+	struct FStatPrinter
+	{
+		~FStatPrinter()
+		{
+#define STATS_PRINT(Stat) PrintStat(# Stat, GAccumulator<EStat::Stat>);
+			ALL_STATS(STATS_PRINT)
+		}
+	};
+
+	static FStatPrinter GStatPrinter;
+}
+
+#define SCOPED_TIMER(Stat) ::StatsImpl::TScopedStatTimer<::StatsImpl::EStat::Stat> Timer ## __LINE__;
+
+#else
+#define SCOPED_TIMER(...)
 #endif
 
 using FIndex = ::index_t;
@@ -351,6 +423,8 @@ inline FKMeans::FKMeans(const TVector<FPoint>& InPoints, const TVector<FPoint>& 
 	, NumThread(GetOmpDefaultNumThread())
 #endif
 {
+	SCOPED_TIMER(FKMeansConstructor);
+
 	Points = AllocArray<FPoint>(NumPoint);
 #if USE_SIMD_POINTS_SWIZZLE_AOT_COPY
 	SwizzledPoints = AllocArray<FPoint>(NumPoint);
@@ -391,6 +465,8 @@ FKMeans::~FKMeans() noexcept
 AttrPerf
 inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict Points, const FPoint* Restrict Centers, FIndex NumPoint, FIndex NumCenter) noexcept
 {
+	SCOPED_TIMER(UpdateAssignment);
+
 #if USE_SIMD_UPDATE_ASSIGNMENT
 	const FIndex NumPointForBatch = NumPoint & ~(BatchSize - 1);
 
@@ -533,6 +609,8 @@ AttrPerf
 #if USE_OMP_UPDATE_CENTERS
 inline void UpdateCenters(FPoint* Restrict PerThreadCenters, FIndex* Restrict PerThreadPointCount, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter, int NumThread) noexcept
 {
+	SCOPED_TIMER(UpdateCenters);
+
 	// TODO: Cache these
 	const FIndex NumPointDivThread = NumPoint / NumThread;
 	const FIndex NumPointModThread = NumPoint % NumThread;
@@ -540,8 +618,11 @@ inline void UpdateCenters(FPoint* Restrict PerThreadCenters, FIndex* Restrict Pe
 	const FIndex NumCenterModThread = NumCenter % NumThread;
 
 #if !USE_OMP_PARALLEL_MEMSET
-	BuiltinMemSet(PerThreadCenters, 0, sizeof(FPoint) * NumCenter * NumThread);
-	BuiltinMemSet(PerThreadPointCount, 0, sizeof(FIndex) * NumCenter * NumThread);
+	{
+		SCOPED_TIMER(ZeroCenterAndPointCount)
+		BuiltinMemSet(PerThreadCenters, 0, sizeof(FPoint) * NumCenter * NumThread);
+		BuiltinMemSet(PerThreadPointCount, 0, sizeof(FIndex) * NumCenter * NumThread);
+	}
 #endif
 
 	#pragma omp parallel num_threads(NumThread) default(none) firstprivate(PerThreadCenters, PerThreadPointCount, Points, Assignment, NumPoint, NumCenter, NumThread, NumPointDivThread, NumPointModThread, NumCenterDivThread, NumCenterModThread)
@@ -556,8 +637,11 @@ inline void UpdateCenters(FPoint* Restrict PerThreadCenters, FIndex* Restrict Pe
 			FIndex* Restrict LocalPointCount = PerThreadPointCount + NumCenter * ThreadId;
 
 #if USE_OMP_PARALLEL_MEMSET
-			BuiltinMemSet(LocalCenters, 0, sizeof(FPoint) * NumCenter);
-			BuiltinMemSet(LocalPointCount, 0, sizeof(FIndex) * NumCenter);
+			{
+				SCOPED_TIMER(ZeroCenterAndPointCount)
+				BuiltinMemSet(LocalCenters, 0, sizeof(FPoint) * NumCenter);
+				BuiltinMemSet(LocalPointCount, 0, sizeof(FIndex) * NumCenter);
+			}
 #endif
 
 			for (FIndex PointId = PointIdBegin; PointId < PointIdEnd; ++PointId)
@@ -593,9 +677,14 @@ inline void UpdateCenters(FPoint* Restrict PerThreadCenters, FIndex* Restrict Pe
 #else
 inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter) noexcept
 {
+	SCOPED_TIMER(UpdateCenters);
+
 #if USE_SIMD_POINTS_SWIZZLE_AOT
-	BuiltinMemSet(Centers, 0, sizeof(FPoint) * NumCenter);
-	BuiltinMemSet(PointCount, 0, sizeof(FIndex) * NumCenter);
+	{
+		SCOPED_TIMER(ZeroCenterAndPointCount)
+		BuiltinMemSet(Centers, 0, sizeof(FPoint) * NumCenter);
+		BuiltinMemSet(PointCount, 0, sizeof(FIndex) * NumCenter);
+	}
 
 	const FIndex NumPointForBatch = NumPoint & ~(BatchSize - 1);
 
@@ -666,8 +755,11 @@ inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount,
 		Centers[CenterId] /= PointCount[CenterId];
 	}
 #elif USE_SIMD_ASSIGNMENT_SWIZZLE
-	BuiltinMemSet(Centers, 0, sizeof(FPoint) * NumCenter);
-	BuiltinMemSet(PointCount, 0, sizeof(FIndex) * NumCenter);
+	{
+		SCOPED_TIMER(ZeroCenterAndPointCount)
+		BuiltinMemSet(Centers, 0, sizeof(FPoint) * NumCenter);
+		BuiltinMemSet(PointCount, 0, sizeof(FIndex) * NumCenter);
+	}
 
 	const FIndex NumPointForBatch = NumPoint & ~(BatchSize - 1);
 
@@ -704,8 +796,11 @@ inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount,
 		Centers[CenterId] /= PointCount[CenterId];
 	}
 #else
-	BuiltinMemSet(Centers, 0, sizeof(FPoint) * NumCenter);
-	BuiltinMemSet(PointCount, 0, sizeof(FIndex) * NumCenter);
+	{
+		SCOPED_TIMER(ZeroCenterAndPointCount)
+		BuiltinMemSet(Centers, 0, sizeof(FPoint) * NumCenter);
+		BuiltinMemSet(PointCount, 0, sizeof(FIndex) * NumCenter);
+	}
 
 	for (FIndex PointId = 0; PointId < NumPoint; ++PointId)
 	{
@@ -725,6 +820,8 @@ inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount,
 AttrPerf
 inline TVector<FIndex> FinalizeAssignment(FIndex* Restrict Assignment, FIndex NumPoint) noexcept
 {
+	SCOPED_TIMER(FinalizeAssignment);
+
 #if USE_SIMD_ASSIGNMENT_SWIZZLE
 	const FIndex NumPointForBatch = NumPoint & ~(BatchSize - 1);
 
@@ -743,6 +840,8 @@ inline TVector<FIndex> FinalizeAssignment(FIndex* Restrict Assignment, FIndex Nu
 
 TVector<FIndex> FKMeans::Run(int NumIteration)
 {
+	SCOPED_TIMER(FKMeansRun);
+
 	using std::swap;
 
 	int IterationId = 0;
@@ -763,9 +862,12 @@ TVector<FIndex> FKMeans::Run(int NumIteration)
 		UpdateAssignment(Assignment, Points, Centers, NumPoint, NumCenter);
 #endif
 
-		if (!BuiltinMemCmp(Assignment, OldAssignment, sizeof(FIndex) * NumPoint))
 		{
-			goto JConverge;
+			SCOPED_TIMER(CompareForQuit);
+			if (!BuiltinMemCmp(Assignment, OldAssignment, sizeof(FIndex) * NumPoint))
+			{
+				goto JConverge;
+			}
 		}
 
 #if USE_SIMD_POINTS_SWIZZLE_AOT_COPY
