@@ -26,23 +26,23 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #define USE_CHECK 1
 #define USE_PERF 1
 
-#define USE_OMP 0
+#define USE_OMP 1
 #define USE_SIMD 1
 
-#define USE_OMP_NUM_THREAD                 (1 && USE_OMP)
-#define USE_OMP_UPDATE_ASSIGNMENT          (1 && USE_OMP)
+#define USE_OMP_NUM_THREAD                 (0 && USE_OMP)
+#define USE_OMP_UPDATE_ASSIGNMENT          (1 && USE_OMP) // 1
 #define USE_OMP_UPDATE_ASSIGNMENT_FINE     (1 && USE_OMP_UPDATE_ASSIGNMENT && USE_OMP_NUM_THREAD)
 #define USE_OMP_UPDATE_CENTER              (1 && USE_OMP_NUM_THREAD)
 
-#define USE_SIMD_OPERATOR                  (1 && USE_SIMD)
-#define USE_SIMD_DISTANCE                  (1 && USE_SIMD)
-#define USE_SIMD_UPDATE_ASSIGNMENT         (1 && USE_SIMD)
-#define USE_SIMD_ASSIGNMENT_SWIZZLE        (0 && USE_SIMD)
-#define USE_SIMD_CENTER_ID_ADD             (1 && USE_SIMD && !USE_OMP_UPDATE_ASSIGNMENT)
-#define USE_SIMD_POINTS_SWIZZLE            (1 && USE_SIMD)
-#define USE_SIMD_POINTS_SWIZZLE_AOT        (0 && USE_SIMD_POINTS_SWIZZLE)
-#define USE_SIMD_POINTS_SWIZZLE_AOT_COPY   (0 && USE_SIMD_POINTS_SWIZZLE_AOT)
-#define USE_SIMD_FMA                       (0 && USE_SIMD)
+#define USE_SIMD_OPERATOR                  (1 && USE_SIMD) // 1
+#define USE_SIMD_DISTANCE                  (1 && USE_SIMD) // 1
+#define USE_SIMD_UPDATE_ASSIGNMENT         (1 && USE_SIMD) // 1
+#define USE_SIMD_ASSIGNMENT_SWIZZLE        (0 && USE_SIMD) // 0
+#define USE_SIMD_CENTER_ID_ADD             (1 && USE_SIMD && !USE_OMP_UPDATE_ASSIGNMENT) // 1
+#define USE_SIMD_POINTS_SWIZZLE            (1 && USE_SIMD) // 1
+#define USE_SIMD_POINTS_SWIZZLE_AOT        (0 && USE_SIMD_POINTS_SWIZZLE) // 0
+#define USE_SIMD_POINTS_SWIZZLE_AOT_COPY   (0 && USE_SIMD_POINTS_SWIZZLE_AOT) // 0
+#define USE_SIMD_FMA                       (1 && USE_SIMD_POINTS_SWIZZLE) // 1
 
 #ifdef _MSC_VER
 #define AttrForceInline __forceinline
@@ -391,7 +391,7 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 	const __m256i VOne = _mm256_set1_epi32(1);
 #endif
 
-#if USE_OMP
+#if USE_OMP_UPDATE_ASSIGNMENT
 	#pragma omp parallel for
 #endif
 	for (FIndex PointId = 0; PointId < NumPointForBatch; PointId += BatchSize)
@@ -430,8 +430,13 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 			const __m256d VDiffY4657 = _mm256_sub_pd(VPointY4657, VCenterY);
 			const __m256d VMulX0213 = _mm256_mul_pd(VDiffX0213, VDiffX0213);
 			const __m256d VMulX4657 = _mm256_mul_pd(VDiffX4657, VDiffX4657);
+#if USE_SIMD_FMA
+			const __m256d VDis0213 = _mm256_fmadd_pd(VDiffY0213, VDiffY0213, VMulX0213);
+			const __m256d VDis4657 = _mm256_fmadd_pd(VDiffY4657, VDiffY4657, VMulX4657);
+#else
 			const __m256d VMulY0213 = _mm256_mul_pd(VDiffY0213, VDiffY0213);
 			const __m256d VMulY4657 = _mm256_mul_pd(VDiffY4657, VDiffY4657);
+#endif
 #else
 			const __m256d VCenter = _mm256_broadcast_pd(AssumeXmmAligned(reinterpret_cast<const __m128d*>(&Centers[CenterId])));
 			const __m256d VDiff01 = _mm256_sub_pd(VPoint01, VCenter);
@@ -447,8 +452,10 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 			const __m256d VMulY0213 = _mm256_unpackhi_pd(VMul01, VMul23);
 			const __m256d VMulY4657 = _mm256_unpackhi_pd(VMul45, VMul67);
 #endif
+#if !USE_SIMD_FMA
 			const __m256d VDis0213 = _mm256_add_pd(VMulX0213, VMulY0213);
 			const __m256d VDis4657 = _mm256_add_pd(VMulX4657, VMulY4657);
+#endif
 			const __m256 VCmp0213 = _mm256_castpd_ps(_mm256_cmp_pd(VDis0213, VMinDis0213, _CMP_LT_OQ));
 			const __m256 VCmp4657 = _mm256_castpd_ps(_mm256_cmp_pd(VDis4657, VMinDis4657, _CMP_LT_OQ));
 			VMinDis0213 = _mm256_min_pd(VDis0213, VMinDis0213);
@@ -488,7 +495,7 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 		Assignment[PointId] = Result;
 	}
 #else
-#if USE_OMP
+#if USE_OMP_UPDATE_ASSIGNMENT
 	#pragma omp parallel for
 #endif
 	for (FIndex PointId = 0; PointId < NumPoint; ++PointId)
