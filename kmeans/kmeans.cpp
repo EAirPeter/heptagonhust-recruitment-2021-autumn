@@ -26,7 +26,7 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #define USE_CHECK 1
 #define USE_PERF 1
 
-#define USE_OMP 0
+#define USE_OMP 1
 #define USE_SIMD 1
 
 #define USE_SIMD_OPERATOR            (1 && USE_SIMD)
@@ -295,6 +295,9 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 
 	const FIndex NumPointForBatch = NumPoint & ~(BatchSize - 1);
 
+#if USE_OMP
+	#pragma omp parallel for
+#endif
 	for (FIndex PointId = 0; PointId < NumPointForBatch; PointId += BatchSize)
 	{
 		const __m256d VPoint01 = Load2(Points + PointId);
@@ -313,8 +316,8 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 			const __m256d VDiff67 = _mm256_sub_pd(VPoint67, VCenter);
 			const __m256d VMul01 = _mm256_mul_pd(VDiff01, VDiff01);
 			const __m256d VMul23 = _mm256_mul_pd(VDiff23, VDiff23);
-			const __m256d VMul45 = _mm256_mul_pd(VDiff45, VDiff23);
-			const __m256d VMul67 = _mm256_mul_pd(VDiff67, VDiff23);
+			const __m256d VMul45 = _mm256_mul_pd(VDiff45, VDiff45);
+			const __m256d VMul67 = _mm256_mul_pd(VDiff67, VDiff67);
 			const __m256d VMulX0213 = _mm256_unpacklo_pd(VMul01, VMul23);
 			const __m256d VMulX4657 = _mm256_unpacklo_pd(VMul45, VMul67);
 			const __m256d VMulY0213 = _mm256_unpackhi_pd(VMul01, VMul23);
