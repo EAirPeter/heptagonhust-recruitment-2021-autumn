@@ -34,6 +34,7 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #define USE_SIMD_UPDATE_ASSIGNMENT   (1 && USE_SIMD)
 #define USE_SIMD_UPDATE_CENTER       (1 && USE_SIMD)
 #define USE_SIMD_FINALIZE_ASSIGNMENT (1 && USE_SIMD)
+#define USE_SIMD_ASSIGNMENT_SWIZZLE  (0 && USE_SIMD)
 #define USE_SIMD_FMA                 (0 && USE_SIMD)
 
 #ifdef _MSC_VER
@@ -295,6 +296,10 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 
 	const FIndex NumPointForBatch = NumPoint & ~(BatchSize - 1);
 
+#if !USE_SIMD_ASSIGNMENT_SWIZZLE
+	const __m256i VPerm = _mm256_set_epi32(7, 3, 5, 1, 6, 2, 4, 0);
+#endif
+
 #if USE_OMP
 	#pragma omp parallel for
 #endif
@@ -332,7 +337,12 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 			const __m256 VCenterId = _mm256_castsi256_ps(_mm256_set1_epi32(CenterId));
 			VAssign04261537 = _mm256_blendv_ps(VAssign04261537, VCenterId, VCmp04261537);
 		}
+#if USE_SIMD_ASSIGNMENT_SWIZZLE
 		_mm256_store_ps(AssumeYmmAligned(reinterpret_cast<float*>(Assignment + PointId)), VAssign04261537);
+#else
+		const __m256 VAssign01234567 = _mm256_permutevar8x32_ps(VAssign04261537, VPerm);
+		_mm256_store_ps(AssumeYmmAligned(reinterpret_cast<float*>(Assignment + PointId)), VAssign01234567);
+#endif
 	}
 
 	for (FIndex PointId = NumPointForBatch; PointId < NumPoint; ++PointId)
@@ -379,7 +389,7 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 AttrPerf
 inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter) noexcept
 {
-#if USE_SIMD_UPDATE_CENTER
+#if USE_SIMD_UPDATE_CENTER && USE_SIMD_ASSIGNMENT_SWIZZLE
 	BuiltinMemSet(Centers, 0, sizeof(FPoint) * NumCenter);
 	BuiltinMemSet(PointCount, 0, sizeof(FIndex) * NumCenter);
 
@@ -440,7 +450,7 @@ inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount,
 AttrPerf
 inline TVector<FIndex> FinalizeAssignment(FIndex* Restrict Assignment, FIndex NumPoint) noexcept
 {
-#if USE_SIMD_FINALIZE_ASSIGNMENT
+#if USE_SIMD_FINALIZE_ASSIGNMENT && USE_SIMD_ASSIGNMENT_SWIZZLE
 	constexpr FIndex BatchSize = 8;
 
 	const FIndex NumPointForBatch = NumPoint & ~(BatchSize - 1);
