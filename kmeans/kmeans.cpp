@@ -32,10 +32,9 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #define USE_SIMD_OPERATOR                  (1 && USE_SIMD)
 #define USE_SIMD_DISTANCE                  (1 && USE_SIMD)
 #define USE_SIMD_UPDATE_ASSIGNMENT         (1 && USE_SIMD)
-#define USE_SIMD_FINALIZE_ASSIGNMENT       (1 && USE_SIMD)
 #define USE_SIMD_ASSIGNMENT_SWIZZLE        (0 && USE_SIMD)
 #define USE_SIMD_POINTS_SWIZZLE            (1 && USE_SIMD)
-#define USE_SIMD_POINTS_SWIZZLE_AOT        (1 && USE_SIMD_POINTS_SWIZZLE)
+#define USE_SIMD_POINTS_SWIZZLE_AOT        (0 && USE_SIMD_POINTS_SWIZZLE)
 #define USE_SIMD_POINTS_SWIZZLE_AOT_COPY   (0 && USE_SIMD_POINTS_SWIZZLE_AOT)
 #define USE_SIMD_FMA                       (0 && USE_SIMD)
 
@@ -591,7 +590,7 @@ inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount,
 AttrPerf
 inline TVector<FIndex> FinalizeAssignment(FIndex* Restrict Assignment, FIndex NumPoint) noexcept
 {
-#if USE_SIMD_FINALIZE_ASSIGNMENT && USE_SIMD_ASSIGNMENT_SWIZZLE
+#if USE_SIMD_ASSIGNMENT_SWIZZLE
 	const FIndex NumPointForBatch = NumPoint & ~(BatchSize - 1);
 
 	const __m256i VPerm = _mm256_set_epi32(7, 3, 5, 1, 6, 2, 4, 0);
