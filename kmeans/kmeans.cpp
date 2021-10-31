@@ -79,7 +79,7 @@ constexpr std::size_t VecAlignment = 64;
 
 #define AssumeXmmAligned(Ptr) static_cast<decltype(Ptr)>(BuiltinAssumeAligned(Ptr, XmmAlignment))
 #define AssumeYmmAligned(Ptr) static_cast<decltype(Ptr)>(BuiltinAssumeAligned(Ptr, YmmAlignment))
-//#define AssumeVecAligned(Ptr) static_cast<decltype(Ptr)>(BuiltinAssumeAligned(Ptr, VecAlignment))
+#define AssumeVecAligned(Ptr) static_cast<decltype(Ptr)>(BuiltinAssumeAligned(Ptr, VecAlignment))
 #endif
 
 using FIndex = ::index_t;
@@ -101,7 +101,7 @@ inline T* AllocArray(std::size_t Num) noexcept
 	T* Ptr = new(std::nothrow) T[Num];
 #endif
 	check(Ptr);
-	return Ptr;
+	return AssumeVecAligned(Ptr);
 }
 
 template<class T>
@@ -109,7 +109,7 @@ AttrForceInline
 inline void FreeArray(T* Ptr) noexcept
 {
 #if USE_SIMD
-	operator delete(Ptr, static_cast<std::align_val_t>(VecAlignment), std::nothrow);
+	operator delete(AssumeVecAligned(Ptr), static_cast<std::align_val_t>(VecAlignment), std::nothrow);
 #else
 	delete[] Ptr;
 #endif
