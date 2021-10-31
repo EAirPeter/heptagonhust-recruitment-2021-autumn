@@ -29,6 +29,10 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #define USE_OMP 1
 #define USE_SIMD 1
 
+#define USE_OMP_NUM_THREAD                 (1 && USE_OMP)
+#define USE_OMP_UPDATE_ASSIGNMENT          (1 && USE_OMP)
+#define USE_OMP_UPDATE_ASSIGNMENT_FINE     (1 && USE_OMP_UPDATE_ASSIGNMENT && USE_OMP_NUM_THREAD)
+
 #define USE_SIMD_OPERATOR                  (1 && USE_SIMD)
 #define USE_SIMD_DISTANCE                  (1 && USE_SIMD)
 #define USE_SIMD_UPDATE_ASSIGNMENT         (1 && USE_SIMD)
@@ -70,6 +74,10 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #define AttrPerf
 #endif
 
+#if USE_OMP
+#include <omp.h>
+#endif
+
 #if USE_SIMD
 #include <immintrin.h>
 
@@ -99,13 +107,13 @@ AttrForceInline
 inline T* AllocArray(std::size_t Num) noexcept
 {
 #if USE_SIMD
-	T* Ptr = static_cast<T*>(operator new(sizeof(T) * Num, static_cast<std::align_val_t>(VecAlignment), std::nothrow));
+	T* Ptr = AssumeVecAligned(static_cast<T*>(operator new(sizeof(T) * Num, static_cast<std::align_val_t>(VecAlignment), std::nothrow)));
 	check(!(reinterpret_cast<std::uintptr_t>(Ptr) & (VecAlignment - 1)));
 #else
 	T* Ptr = new(std::nothrow) T[Num];
 #endif
 	check(Ptr);
-	return AssumeVecAligned(Ptr);
+	return Ptr;
 }
 
 template<class T>
@@ -291,10 +299,26 @@ inline void SwizzlePoints(FPoint* Restrict Points, FIndex NumPoint) noexcept
 }
 #endif
 
+#if USE_OMP_NUM_THREAD
+AttrPerf
+inline int GetOmpDefaultNumThread() noexcept
+{
+	int Result;
+	#pragma omp parallel default(none) shared(Result)
+	{
+		#pragma omp master
+		{
+			Result = omp_get_num_threads();
+		}
+	}
+	return Result;
+}
+#endif
+
 struct FKMeans
 {
 	FPoint* Points = nullptr;
-#if USE_SIMD_POINTS_SWIZZLE_AOT
+#if USE_SIMD_POINTS_SWIZZLE_COPY
 	FPoint* SwizzledPoints = nullptr;
 #endif
 	FPoint* Centers = nullptr;
@@ -303,6 +327,9 @@ struct FKMeans
 	FIndex* PointCount = nullptr;
 	FIndex NumPoint;
 	FIndex NumCenter;
+#if USE_OMP_NUM_THREAD
+	int NumThread;
+#endif
 
 	FKMeans(const TVector<FPoint>& InPoints, const TVector<FPoint>& InInitCenters) noexcept;
 
@@ -314,6 +341,9 @@ struct FKMeans
 inline FKMeans::FKMeans(const TVector<FPoint>& InPoints, const TVector<FPoint>& InInitCenters) noexcept
 	: NumPoint(static_cast<FIndex>(InPoints.size()))
 	, NumCenter(static_cast<FIndex>(InInitCenters.size()))
+#if USE_OMP_NUM_THREAD
+	, NumThread(GetOmpDefaultNumThread())
+#endif
 {
 	Points = AllocArray<FPoint>(NumPoint);
 #if USE_SIMD_POINTS_SWIZZLE_AOT_COPY
