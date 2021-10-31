@@ -1,5 +1,6 @@
 #include "kmeans.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -29,20 +30,21 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #define USE_OMP 1
 #define USE_SIMD 1
 
-#define USE_OMP_NUM_THREAD                 (0 && USE_OMP)
-#define USE_OMP_UPDATE_ASSIGNMENT          (1 && USE_OMP) // 1
-#define USE_OMP_UPDATE_ASSIGNMENT_FINE     (1 && USE_OMP_UPDATE_ASSIGNMENT && USE_OMP_NUM_THREAD)
-#define USE_OMP_UPDATE_CENTER              (1 && USE_OMP_NUM_THREAD)
-
 #define USE_SIMD_OPERATOR                  (1 && USE_SIMD) // 1
 #define USE_SIMD_DISTANCE                  (1 && USE_SIMD) // 1
 #define USE_SIMD_UPDATE_ASSIGNMENT         (1 && USE_SIMD) // 1
 #define USE_SIMD_ASSIGNMENT_SWIZZLE        (0 && USE_SIMD) // 0
 #define USE_SIMD_CENTER_ID_ADD             (1 && USE_SIMD && !USE_OMP_UPDATE_ASSIGNMENT) // 1
-#define USE_SIMD_POINTS_SWIZZLE            (1 && USE_SIMD) // 1
+#define USE_SIMD_POINTS_SWIZZLE            (1 && USE_SIMD && !USE_SIMD_ASSIGNMENT_SWIZZLE) // 1
 #define USE_SIMD_POINTS_SWIZZLE_AOT        (0 && USE_SIMD_POINTS_SWIZZLE) // 0
 #define USE_SIMD_POINTS_SWIZZLE_AOT_COPY   (0 && USE_SIMD_POINTS_SWIZZLE_AOT) // 0
 #define USE_SIMD_FMA                       (1 && USE_SIMD_POINTS_SWIZZLE) // 1
+
+#define USE_OMP_NUM_THREAD                 (1 && USE_OMP)
+#define USE_OMP_UPDATE_ASSIGNMENT          (1 && USE_OMP) // 1
+#define USE_OMP_UPDATE_ASSIGNMENT_FINE     (0 && USE_OMP_UPDATE_ASSIGNMENT && USE_OMP_NUM_THREAD)
+#define USE_OMP_UPDATE_CENTERS             (1 && USE_OMP_NUM_THREAD && !USE_SIMD_ASSIGNMENT_SWIZZLE && (!USE_SIMD_POINTS_SWIZZLE_AOT || USE_SIMD_POINTS_SWIZZLE_AOT_COPY))
+#define USE_OMP_PARALLEL_MEMSET            (0 && USE_OMP_UPDATE_CENTERS)
 
 #ifdef _MSC_VER
 #define AttrForceInline __forceinline
@@ -302,6 +304,8 @@ inline void SwizzlePoints(FPoint* Restrict Points, FIndex NumPoint) noexcept
 #endif
 
 #if USE_OMP_NUM_THREAD
+constexpr int OmpMaxNumThread = 64;
+
 AttrPerf
 inline int GetOmpDefaultNumThread() noexcept
 {
@@ -313,7 +317,7 @@ inline int GetOmpDefaultNumThread() noexcept
 			Result = omp_get_num_threads();
 		}
 	}
-	return Result;
+	return std::min(OmpMaxNumThread, Result);
 }
 #endif
 
@@ -351,11 +355,18 @@ inline FKMeans::FKMeans(const TVector<FPoint>& InPoints, const TVector<FPoint>& 
 #if USE_SIMD_POINTS_SWIZZLE_AOT_COPY
 	SwizzledPoints = AllocArray<FPoint>(NumPoint);
 #endif
+#if USE_OMP_UPDATE_CENTERS
+	Centers = AllocArray<FPoint>(NumCenter * NumThread);
+#else
 	Centers = AllocArray<FPoint>(NumCenter);
+#endif
 	Assignment = AllocArray<FIndex>(NumPoint);
 	OldAssignment = AllocArray<FIndex>(NumPoint);
+#if USE_OMP_UPDATE_CENTERS
+	PointCount = AllocArray<FIndex>(NumCenter * NumThread);
+#else
 	PointCount = AllocArray<FIndex>(NumCenter);
-
+#endif
 	BuiltinMemCpy(Points, InPoints.data(), sizeof(FPoint) * NumPoint);
 #if USE_SIMD_POINTS_SWIZZLE_AOT_COPY
 	SwizzlePoints(SwizzledPoints, Points, NumPoint);
@@ -369,7 +380,7 @@ FKMeans::~FKMeans() noexcept
 {
 	FreeArray(Points);
 #if USE_SIMD_POINTS_SWIZZLE_AOT_COPY
-	SwizzledPoints = AllocArray<FPoint>(NumPoint);
+	FreeArray(SwizzledPoints);
 #endif
 	FreeArray(Centers);
 	FreeArray(Assignment);
@@ -519,6 +530,67 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 }
 
 AttrPerf
+#if USE_OMP_UPDATE_CENTERS
+inline void UpdateCenters(FPoint* Restrict PerThreadCenters, FIndex* Restrict PerThreadPointCount, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter, int NumThread) noexcept
+{
+	// TODO: Cache these
+	const FIndex NumPointDivThread = NumPoint / NumThread;
+	const FIndex NumPointModThread = NumPoint % NumThread;
+	const FIndex NumCenterDivThread = NumCenter / NumThread;
+	const FIndex NumCenterModThread = NumCenter % NumThread;
+
+#if !USE_OMP_PARALLEL_MEMSET
+	BuiltinMemSet(PerThreadCenters, 0, sizeof(FPoint) * NumCenter * NumThread);
+	BuiltinMemSet(PerThreadPointCount, 0, sizeof(FIndex) * NumCenter * NumThread);
+#endif
+
+	#pragma omp parallel num_threads(NumThread) default(none) firstprivate(PerThreadCenters, PerThreadPointCount, Points, Assignment, NumPoint, NumCenter, NumThread, NumPointDivThread, NumPointModThread, NumCenterDivThread, NumCenterModThread)
+	{
+		const int ThreadId = omp_get_thread_num();
+
+		{
+			const FIndex LocalNumPoint = ThreadId < NumPointModThread ? NumPointDivThread + 1 : NumPointDivThread;
+			const FIndex PointIdBegin = ThreadId < NumPointModThread ? ThreadId * LocalNumPoint : ThreadId * LocalNumPoint + NumPointModThread;
+			const FIndex PointIdEnd = PointIdBegin + LocalNumPoint;
+			FPoint* Restrict LocalCenters = PerThreadCenters + NumCenter * ThreadId;
+			FIndex* Restrict LocalPointCount = PerThreadPointCount + NumCenter * ThreadId;
+
+#if USE_OMP_PARALLEL_MEMSET
+			BuiltinMemSet(LocalCenters, 0, sizeof(FPoint) * NumCenter);
+			BuiltinMemSet(LocalPointCount, 0, sizeof(FIndex) * NumCenter);
+#endif
+
+			for (FIndex PointId = PointIdBegin; PointId < PointIdEnd; ++PointId)
+			{
+				const FIndex CenterId = Assignment[PointId];
+				LocalCenters[CenterId] += Points[PointId];
+				++LocalPointCount[CenterId];
+			}
+		}
+
+		#pragma omp barrier
+
+		{
+			const FIndex LocalNumCenter = ThreadId < NumCenterModThread ? NumCenterDivThread + 1 : NumCenterDivThread;
+			const FIndex CenterIdBegin = ThreadId < NumCenterModThread ? ThreadId * LocalNumCenter : ThreadId * LocalNumCenter + NumCenterModThread;
+			const FIndex CenterIdEnd = CenterIdBegin + LocalNumCenter;
+
+			for (FIndex CenterId = CenterIdBegin; CenterId < CenterIdEnd; ++CenterId)
+			{
+				FPoint Center(0.0, 0.0);
+				FIndex NumPointAssigned = 0;
+				for (int LocalThreadId = 0; LocalThreadId < NumThread; ++LocalThreadId)
+				{
+					Center += PerThreadCenters[LocalThreadId * NumCenter + CenterId];
+					NumPointAssigned += PerThreadPointCount[LocalThreadId * NumCenter + CenterId];
+				}
+				Center /= NumPointAssigned;
+				PerThreadCenters[CenterId] = Center;
+			}
+		}
+	}
+}
+#else
 inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter) noexcept
 {
 #if USE_SIMD_POINTS_SWIZZLE_AOT
@@ -529,10 +601,17 @@ inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount,
 
 	for (FIndex PointId = 0; PointId < NumPointForBatch; PointId += BatchSize)
 	{
+#if USE_SIMD_POINTS_SWIZZLE_AOT_COPY
+		const __m256d VPointX0213 = Load2(SwizzledPoints + PointId);
+		const __m256d VPointY0213 = Load2(SwizzledPoints + PointId + 2);
+		const __m256d VPointX4657 = Load2(SwizzledPoints + PointId + 4);
+		const __m256d VPointY4657 = Load2(SwizzledPoints + PointId + 6);
+#else
 		const __m256d VPointX0213 = Load2(Points + PointId);
 		const __m256d VPointY0213 = Load2(Points + PointId + 2);
 		const __m256d VPointX4657 = Load2(Points + PointId + 4);
 		const __m256d VPointY4657 = Load2(Points + PointId + 6);
+#endif
 		const __m256d VPoint01 = _mm256_unpacklo_pd(VPointX0213, VPointY0213);
 		const __m256d VPoint23 = _mm256_unpackhi_pd(VPointX0213, VPointY0213);
 		const __m256d VPoint45 = _mm256_unpacklo_pd(VPointX4657, VPointY4657);
@@ -574,7 +653,11 @@ inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount,
 	for (FIndex PointId = NumPointForBatch; PointId < NumPoint; ++PointId)
 	{
 		const FIndex CenterId = Assignment[PointId];
+#if USE_SIMD_POINTS_SWIZZLE_AOT_COPY
 		Centers[CenterId] += Points[PointId];
+#else
+		Centers[CenterId] += Points[PointId];
+#endif
 		++PointCount[CenterId];
 	}
 
@@ -637,6 +720,7 @@ inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount,
 	}
 #endif
 }
+#endif
 
 AttrPerf
 inline TVector<FIndex> FinalizeAssignment(FIndex* Restrict Assignment, FIndex NumPoint) noexcept
@@ -686,6 +770,8 @@ TVector<FIndex> FKMeans::Run(int NumIteration)
 
 #if USE_SIMD_POINTS_SWIZZLE_AOT_COPY
 		UpdateCenters(Centers, PointCount, SwizzledPoints, Assignment, NumPoint, NumCenter);
+#elif USE_OMP_UPDATE_CENTERS
+		UpdateCenters(Centers, PointCount, Points, Assignment, NumPoint, NumCenter, NumThread);
 #else
 		UpdateCenters(Centers, PointCount, Points, Assignment, NumPoint, NumCenter);
 #endif
