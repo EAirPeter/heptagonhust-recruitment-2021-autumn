@@ -35,6 +35,8 @@ K-Means
   + 注意对齐和`Centers`内数据间留空，排除false sharing
 * 多写几个版本多跑几次benchmark
 
+## 测试
+
 经过正确性测试和性能测试后，有下列优化结果：
 |#Point |#Cluster|#Iteration|Original |This (#Thread=1)  |This (#Thread=2)          |This(#Thread=4)           |This(#Thread=8)           |This(#Thread=12)          |
 |-------|--------|----------|---------|------------------|--------------------------|--------------------------|--------------------------|--------------------------|
@@ -50,6 +52,16 @@ K-Means
 注：
 * This (#Thread=1)列括号中的数字是`(OriginalTime/ThisTime)`
 * This (#Thread=N)列括号中的数字是`(OriginalTime/ThisTime, Thread1Time/ThisTime)`
+
+## 关于源代码
+首先，代码风格相对原来的做了一些改变，更加贴合个人日常习惯，先在这里做出说明。
+
+其次，代码看起来可能会感到冗长，原因是：
+* 代码中留下了一些可以开启/关闭优化策略的macro，它们以`USE_`开头；也留下了很多代码以应对不同的
+  开关组 合。
+* 个人使用的IDE不会缩进preprocessor directives，
+
+可以利用`gcc -E -P`或类似工具来帮助阅读与实际生效的`USE_`开关相关的代码。
 
 ## 参考资料
 * [Intel(R) Intrinsics Guide](https://www.intel.com/content/www/us/en/docs/intrinsics-guide/)
