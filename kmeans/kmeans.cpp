@@ -25,12 +25,13 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 // ^^^^^^ They will not be used in this file
 
 // TODO: Rearrange Centers array
+// TODO: Retest AOT swizzling
 
 //// START
 
 #define USE_CHECK 1
 #define USE_PERF 1
-#define USE_STATS 1
+#define USE_STATS 0
 
 #define USE_OMP 1
 #define USE_SIMD 1
@@ -432,7 +433,7 @@ inline int GetOmpDefaultNumThread() noexcept
 struct FKMeans
 {
 	FPoint* Points = nullptr;
-#if USE_SIMD_POINTS_SWIZZLE_COPY
+#if USE_SIMD_POINTS_SWIZZLE_AOT_COPY
 	FPoint* SwizzledPoints = nullptr;
 #endif
 	FPoint* Centers = nullptr;
@@ -720,7 +721,7 @@ inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount,
 {
 	SCOPED_TIMER(UpdateCenters);
 
-#if USE_SIMD_POINTS_SWIZZLE_AOT
+#if USE_SIMD_POINTS_SWIZZLE_AOT && !USE_SIMD_POINTS_SWIZZLE_AOT_COPY
 	{
 		SCOPED_TIMER(ZeroCenterAndPointCount)
 		BuiltinMemSet(Centers, 0, sizeof(FPoint) * NumCenter);
@@ -731,17 +732,10 @@ inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount,
 
 	for (FIndex PointId = 0; PointId < NumPointForBatch; PointId += BatchSize)
 	{
-#if USE_SIMD_POINTS_SWIZZLE_AOT_COPY
-		const __m256d VPointX0213 = Load2(SwizzledPoints + PointId);
-		const __m256d VPointY0213 = Load2(SwizzledPoints + PointId + 2);
-		const __m256d VPointX4657 = Load2(SwizzledPoints + PointId + 4);
-		const __m256d VPointY4657 = Load2(SwizzledPoints + PointId + 6);
-#else
 		const __m256d VPointX0213 = Load2(Points + PointId);
 		const __m256d VPointY0213 = Load2(Points + PointId + 2);
 		const __m256d VPointX4657 = Load2(Points + PointId + 4);
 		const __m256d VPointY4657 = Load2(Points + PointId + 6);
-#endif
 		const __m256d VPoint01 = _mm256_unpacklo_pd(VPointX0213, VPointY0213);
 		const __m256d VPoint23 = _mm256_unpackhi_pd(VPointX0213, VPointY0213);
 		const __m256d VPoint45 = _mm256_unpacklo_pd(VPointX4657, VPointY4657);
@@ -762,14 +756,14 @@ inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount,
 		const FIndex CenterId5 = Assignment[PointId + 5];
 		const FIndex CenterId6 = Assignment[PointId + 6];
 		const FIndex CenterId7 = Assignment[PointId + 7];
-		Store1(Centers[CenterId0], _mm_add_pd(Load1(Centers[CenterId0]), VPoint0));
-		Store1(Centers[CenterId1], _mm_add_pd(Load1(Centers[CenterId1]), VPoint1));
-		Store1(Centers[CenterId2], _mm_add_pd(Load1(Centers[CenterId2]), VPoint2));
-		Store1(Centers[CenterId3], _mm_add_pd(Load1(Centers[CenterId3]), VPoint3));
-		Store1(Centers[CenterId4], _mm_add_pd(Load1(Centers[CenterId4]), VPoint4));
-		Store1(Centers[CenterId5], _mm_add_pd(Load1(Centers[CenterId5]), VPoint5));
-		Store1(Centers[CenterId6], _mm_add_pd(Load1(Centers[CenterId6]), VPoint6));
-		Store1(Centers[CenterId7], _mm_add_pd(Load1(Centers[CenterId7]), VPoint7));
+		Store1(&Centers[CenterId0], _mm_add_pd(Load1(&Centers[CenterId0]), VPoint0));
+		Store1(&Centers[CenterId1], _mm_add_pd(Load1(&Centers[CenterId1]), VPoint1));
+		Store1(&Centers[CenterId2], _mm_add_pd(Load1(&Centers[CenterId2]), VPoint2));
+		Store1(&Centers[CenterId3], _mm_add_pd(Load1(&Centers[CenterId3]), VPoint3));
+		Store1(&Centers[CenterId4], _mm_add_pd(Load1(&Centers[CenterId4]), VPoint4));
+		Store1(&Centers[CenterId5], _mm_add_pd(Load1(&Centers[CenterId5]), VPoint5));
+		Store1(&Centers[CenterId6], _mm_add_pd(Load1(&Centers[CenterId6]), VPoint6));
+		Store1(&Centers[CenterId7], _mm_add_pd(Load1(&Centers[CenterId7]), VPoint7));
 		++PointCount[CenterId0];
 		++PointCount[CenterId1];
 		++PointCount[CenterId2];
@@ -783,11 +777,7 @@ inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount,
 	for (FIndex PointId = NumPointForBatch; PointId < NumPoint; ++PointId)
 	{
 		const FIndex CenterId = Assignment[PointId];
-#if USE_SIMD_POINTS_SWIZZLE_AOT_COPY
 		Centers[CenterId] += Points[PointId];
-#else
-		Centers[CenterId] += Points[PointId];
-#endif
 		++PointCount[CenterId];
 	}
 
@@ -917,9 +907,7 @@ TVector<FIndex> FKMeans::Run(int NumIteration)
 			}
 		}
 
-#if USE_SIMD_POINTS_SWIZZLE_AOT_COPY
-		UpdateCenters(Centers, PointCount, SwizzledPoints, Assignment, NumPoint, NumCenter);
-#elif USE_OMP_UPDATE_CENTERS
+#if USE_OMP_UPDATE_CENTERS
 		UpdateCenters(Centers, PointCount, Points, Assignment, NumPoint, NumCenter, NumThread);
 #else
 		UpdateCenters(Centers, PointCount, Points, Assignment, NumPoint, NumCenter);
