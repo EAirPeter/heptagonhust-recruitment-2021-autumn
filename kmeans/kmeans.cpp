@@ -44,7 +44,7 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #define USE_SIMD_FMA                       (1 && USE_SIMD_POINTS_SWIZZLE) // 1
 
 #define USE_OMP_NUM_THREAD                 (1 && USE_OMP)
-#define USE_OMP_UPDATE_ASSIGNMENT          (1 && USE_OMP) // 1
+#define USE_OMP_UPDATE_ASSIGNMENT          (1 && USE_OMP_NUM_THREAD) // 1
 #define USE_OMP_UPDATE_CENTERS             (1 && USE_OMP_NUM_THREAD) // 1
 #define USE_OMP_PARALLEL_MEMSET            (0 && USE_OMP_UPDATE_CENTERS)
 
@@ -119,7 +119,8 @@ constexpr std::size_t VecAlignment = 64;
 	E(UpdateCenters_Division) \
 	E(CompareForQuit) \
 	E(ZeroCenterAndPointCount) \
-	E(FinalizeAssignment)
+	E(FinalizeAssignment) \
+	E(IO)
 
 namespace StatsImpl
 {
@@ -195,6 +196,7 @@ namespace StatsImpl
 		}
 	};
 
+	[[maybe_unused]]
 	static FStatPrinter GStatPrinter;
 }
 
@@ -441,20 +443,18 @@ inline double GetDistance(const FPoint& Restrict LHS, const FPoint& Restrict RHS
 #endif
 
 #if USE_OMP_NUM_THREAD
-constexpr int OmpMaxNumThread = 64;
-
 AttrPerf
 inline int GetOmpDefaultNumThread() noexcept
 {
 	int Result;
-	#pragma omp parallel default(none) shared(Result)
+	#pragma omp parallel
 	{
 		#pragma omp master
 		{
 			Result = omp_get_num_threads();
 		}
 	}
-	return std::min(OmpMaxNumThread, Result);
+	return Result;
 }
 #endif
 
@@ -527,7 +527,11 @@ FKMeans::~FKMeans() noexcept
 }
 
 AttrPerf
+#if USE_OMP_UPDATE_ASSIGNMENT
+inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict Points, const FCenter* Restrict Centers, FIndex NumPoint, FIndex NumCenter, int NumThread) noexcept
+#else
 inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict Points, const FCenter* Restrict Centers, FIndex NumPoint, FIndex NumCenter) noexcept
+#endif
 {
 	SCOPED_TIMER(UpdateAssignment);
 
@@ -541,7 +545,7 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 #endif
 
 #if USE_OMP_UPDATE_ASSIGNMENT
-	#pragma omp parallel for
+	#pragma omp parallel for num_threads(NumThread)
 #endif
 	for (FIndex PointId = 0; PointId < NumPointForBatch; PointId += BatchSize)
 	{
@@ -638,7 +642,7 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 	}
 #else
 #if USE_OMP_UPDATE_ASSIGNMENT
-	#pragma omp parallel for
+	#pragma omp parallel for num_threads(NumThread)
 #endif
 	for (FIndex PointId = 0; PointId < NumPoint; ++PointId)
 	{
@@ -812,9 +816,12 @@ TVector<FIndex> FKMeans::Run(int NumIteration)
 	using std::swap;
 
 	int IterationId = 0;
-	std::cout << "Running kmeans with num points = " << NumPoint
-		<< ", num centers = " << NumCenter
-		<< ", max iterations = " << NumIteration << "...\n";
+	{
+		SCOPED_TIMER(IO);
+		std::cout << "Running kmeans with num points = " << NumPoint
+			<< ", num centers = " << NumCenter
+			<< ", max iterations = " << NumIteration << "...\n";
+	}
 
 	// Give it an invalid value to trigger at least two iteration
 	OldAssignment[0] = NumPoint;
@@ -823,7 +830,11 @@ TVector<FIndex> FKMeans::Run(int NumIteration)
 	{
 		++IterationId;
 
+#if USE_OMP_UPDATE_ASSIGNMENT
+		UpdateAssignment(Assignment, Points, Centers, NumPoint, NumCenter, NumThread);
+#else
 		UpdateAssignment(Assignment, Points, Centers, NumPoint, NumCenter);
+#endif
 
 #if !USE_FIX_NUM_ITERATION
 		{
@@ -853,7 +864,10 @@ TVector<FIndex> FKMeans::Run(int NumIteration)
 #if !USE_FIX_NUM_ITERATION
 JConverge:
 #endif
-	std::cout << "Finished in " << IterationId << " iterations.\n";
+	{
+		SCOPED_TIMER(IO);
+		std::cout << "Finished in " << IterationId << " iterations.\n";
+	}
 	return FinalizeAssignment(Assignment, NumPoint);
 }
 
