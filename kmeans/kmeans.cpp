@@ -33,6 +33,9 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #define USE_PERF 1
 #define USE_STATS 0
 
+// Set to non-zero to make the program runs longer
+#define USE_FIX_NUM_ITERATION 400
+
 #define USE_OMP 1
 #define USE_SIMD 1
 
@@ -40,7 +43,7 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #define USE_SIMD_DISTANCE                  (1 && USE_SIMD_OPERATOR) // 1
 #define USE_SIMD_UPDATE_ASSIGNMENT         (1 && USE_SIMD) // 1
 #define USE_SIMD_ASSIGNMENT_SWIZZLE        (0 && USE_SIMD) // 0
-#define USE_SIMD_CENTER_ID_ADD             (1 && USE_SIMD && !USE_OMP_UPDATE_ASSIGNMENT) // 1
+#define USE_SIMD_CENTER_ID_ADD             (1 && USE_SIMD_UPDATE_ASSIGNMENT) // 1
 #define USE_SIMD_POINTS_SWIZZLE            (1 && USE_SIMD && !USE_SIMD_ASSIGNMENT_SWIZZLE) // 1
 #define USE_SIMD_POINTS_SWIZZLE_AOT        (0 && USE_SIMD_POINTS_SWIZZLE) // 0
 #define USE_SIMD_POINTS_SWIZZLE_AOT_COPY   (0 && USE_SIMD_POINTS_SWIZZLE_AOT) // 0
@@ -49,7 +52,7 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #define USE_OMP_NUM_THREAD                 (1 && USE_OMP)
 #define USE_OMP_UPDATE_ASSIGNMENT          (1 && USE_OMP) // 1
 #define USE_OMP_UPDATE_ASSIGNMENT_FINE     (0 && USE_OMP_UPDATE_ASSIGNMENT && USE_OMP_NUM_THREAD)
-#define USE_OMP_UPDATE_CENTERS             (1 && USE_OMP_NUM_THREAD && !USE_SIMD_ASSIGNMENT_SWIZZLE && (!USE_SIMD_POINTS_SWIZZLE_AOT || USE_SIMD_POINTS_SWIZZLE_AOT_COPY))
+#define USE_OMP_UPDATE_CENTERS             (0 && USE_OMP_NUM_THREAD && !USE_SIMD_ASSIGNMENT_SWIZZLE && (!USE_SIMD_POINTS_SWIZZLE_AOT || USE_SIMD_POINTS_SWIZZLE_AOT_COPY))
 #define USE_OMP_PARALLEL_MEMSET            (0 && USE_OMP_UPDATE_CENTERS)
 
 #ifdef _MSC_VER
@@ -516,7 +519,11 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 #endif
 
 #if USE_OMP_UPDATE_ASSIGNMENT
+#if USE_SIMD_CENTER_ID_ADD
 	#pragma omp parallel for
+#else
+	#pragma omp parallel for
+#endif
 #endif
 	for (FIndex PointId = 0; PointId < NumPointForBatch; PointId += BatchSize)
 	{
@@ -899,6 +906,7 @@ TVector<FIndex> FKMeans::Run(int NumIteration)
 		UpdateAssignment(Assignment, Points, Centers, NumPoint, NumCenter);
 #endif
 
+#if !USE_FIX_NUM_ITERATION
 		{
 			SCOPED_TIMER(CompareForQuit);
 			if (!BuiltinMemCmp(Assignment, OldAssignment, sizeof(FIndex) * NumPoint))
@@ -906,6 +914,7 @@ TVector<FIndex> FKMeans::Run(int NumIteration)
 				goto JConverge;
 			}
 		}
+#endif
 
 #if USE_OMP_UPDATE_CENTERS
 		UpdateCenters(Centers, PointCount, Points, Assignment, NumPoint, NumCenter, NumThread);
@@ -916,7 +925,9 @@ TVector<FIndex> FKMeans::Run(int NumIteration)
 		swap(Assignment, OldAssignment);
 	}
 
+#if !USE_FIX_NUM_ITERATION
 JConverge:
+#endif
 	std::cout << "Finished in " << IterationId << " iterations.\n";
 	return FinalizeAssignment(Assignment, NumPoint);
 }
@@ -928,7 +939,12 @@ Kmeans::Kmeans(const std::vector<Point>& InPoints, const std::vector<Point>& InI
 
 std::vector<index_t> Kmeans::Run(int MaxIterations)
 {
+#if USE_FIX_NUM_ITERATION
+	(void) MaxIterations;
+	return Impl->Run(USE_FIX_NUM_ITERATION);
+#else
 	return Impl->Run(MaxIterations);
+#endif
 }
 
 void FKMeansDeleter::operator()(FKMeans* Obj) const noexcept
