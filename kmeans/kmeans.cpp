@@ -31,7 +31,7 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #define USE_STATS 0
 
 // Set to non-zero to make the program runs longer
-#define USE_FIX_NUM_ITERATION 400
+#define USE_FIX_NUM_ITERATION 0
 
 #define USE_OMP 1
 #define USE_SIMD 1
