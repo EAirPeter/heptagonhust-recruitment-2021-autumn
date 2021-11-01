@@ -46,6 +46,7 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #define USE_OMP_NUM_THREAD                 (1 && USE_OMP)
 #define USE_OMP_UPDATE_ASSIGNMENT          (1 && USE_OMP_NUM_THREAD) // 1
 #define USE_OMP_UPDATE_CENTERS             (1 && USE_OMP_NUM_THREAD) // 1
+#define USE_OMP_UPDATE_CENTERS_NOCOPY      (0 && USE_OMP_UPDATE_ASSIGNMENT) // 0
 #define USE_OMP_PARALLEL_MEMSET            (0 && USE_OMP_UPDATE_CENTERS) // 0
 
 #define USE_PACKED_CENTERS                 1 // 1
@@ -490,7 +491,7 @@ inline FKMeans::FKMeans(const FInPoint* Restrict InPoints, const FInPoint* Restr
 	SCOPED_TIMER(FKMeansConstructor);
 
 	Points = AllocArray<FPoint>(NumPoint);
-#if USE_OMP_UPDATE_CENTERS
+#if USE_OMP_UPDATE_CENTERS && !USE_OMP_UPDATE_CENTERS_NOCOPY
 	Centers = AllocArray<FCenter>(NumCenter * NumThread);
 #else
 	Centers = AllocArray<FCenter>(NumCenter);
@@ -498,7 +499,7 @@ inline FKMeans::FKMeans(const FInPoint* Restrict InPoints, const FInPoint* Restr
 	Assignment = AllocArray<FIndex>(NumPoint);
 	OldAssignment = AllocArray<FIndex>(NumPoint);
 #if !USE_PACKED_CENTERS
-#if USE_OMP_UPDATE_CENTERS
+#if USE_OMP_UPDATE_CENTERS && !USE_OMP_UPDATE_CENTERS_NOCOPY
 	PointCount = AllocArray<FIndex>(NumCenter * NumThread);
 #else
 	PointCount = AllocArray<FIndex>(NumCenter);
@@ -665,7 +666,7 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 }
 
 AttrPerf
-#if USE_OMP_UPDATE_CENTERS
+#if USE_OMP_UPDATE_CENTERS && !USE_OMP_UPDATE_CENTERS_NOCOPY
 #if USE_PACKED_CENTERS
 inline void UpdateCenters(FPackedCenter* Restrict PerThreadCenters, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter, int NumThread) noexcept
 #else
@@ -757,10 +758,18 @@ inline void UpdateCenters(FPoint* Restrict PerThreadCenters, FIndex* Restrict Pe
 	}
 }
 #else
+#if USE_OMP_UPDATE_CENTERS_NOCOPY
+#if USE_PACKED_CENTERS
+inline void UpdateCenters(FPackedCenter* Restrict Centers, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter, int NumThread) noexcept
+#else
+inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter, int NumThread) noexcept
+#endif
+#else
 #if USE_PACKED_CENTERS
 inline void UpdateCenters(FPackedCenter* Restrict Centers, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter) noexcept
 #else
 inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter) noexcept
+#endif
 #endif
 {
 	SCOPED_TIMER(UpdateCenters);
@@ -775,10 +784,30 @@ inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount,
 
 	{
 		SCOPED_TIMER(UpdateCenters_Gather);
+#if USE_OMP_UPDATE_CENTERS_NOCOPY
+		#pragma omp parallel for num_threads(NumThread)
+#endif
 		for (FIndex PointId = 0; PointId < NumPoint; ++PointId)
 		{
 			const FIndex CenterId = Assignment[PointId];
+#if USE_OMP_UPDATE_CENTERS_NOCOPY
+			//for(;;)
+			//{
+			//	const __m128d VOldCenter = Centers[CenterId];
+			//	const __m128d VNewCenter = VOldCenter + Points[PointId];
+			//	if (__sync_bool_compare_and_swap(reinterpret_cast<__int128*>(&Centers[CenterId]), *reinterpret_cast<const __int128*>(&VOldCenter), *reinterpret_cast<const __int128*>(&VNewCenter)))
+			//		break;
+			//}
+			#pragma omp atomic
+			Centers[CenterId].X += Points[PointId].X;
+			#pragma omp atomic
+			Centers[CenterId].Y += Points[PointId].Y;
+#else
 			Centers[CenterId] += Points[PointId];
+#endif
+#if USE_OMP_UPDATE_CENTERS_NOCOPY
+			#pragma omp atomic
+#endif
 #if USE_PACKED_CENTERS
 			++Centers[CenterId].Count;
 #else
@@ -789,6 +818,9 @@ inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount,
 
 	{
 		SCOPED_TIMER(UpdateCenters_Division);
+#if USE_OMP_UPDATE_CENTERS_NOCOPY
+		#pragma omp parallel for num_threads(NumThread)
+#endif
 		for (FIndex CenterId = 0; CenterId < NumCenter; ++CenterId)
 		{
 #if USE_PACKED_CENTERS
