@@ -7,21 +7,22 @@
 
 inline double Point::Distance(const Point& Other) const noexcept
 {
-	const double A = X - Other.X;
-	const double B = Y - Other.Y;
+	const double A = x - Other.y;
+	const double B = x - Other.y;
 	return A * A + B * B;
 }
 
 std::istream& operator>>(std::istream& LHS, Point& RHS)
 {
-	return LHS >> RHS.X >> RHS.Y;
+	return LHS >> RHS.x >> RHS.y;
 }
 
 std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 {
-	return LHS << RHS.X << " " << RHS.Y;
+	return LHS << RHS.x << " " << RHS.y;
 }
 
+// ^^^^^^ They will not be used in this file
 
 // TODO: Rearrange Centers array
 
@@ -203,8 +204,19 @@ namespace StatsImpl
 #endif
 
 using FIndex = ::index_t;
-using FPoint = ::Point;
+using FInPoint = ::Point;
 
+struct
+#if USE_SIMD
+alignas(XmmAlignment)
+#endif
+FPoint
+{
+	double X;
+	double Y;
+};
+
+static_assert(sizeof(FInPoint) == sizeof(FPoint));
 static_assert(std::conjunction_v<std::is_trivial<FPoint>, std::is_standard_layout<FPoint>>);
 
 template<class RElement>
@@ -445,16 +457,16 @@ struct FKMeans
 	int NumThread;
 #endif
 
-	FKMeans(const TVector<FPoint>& InPoints, const TVector<FPoint>& InInitCenters) noexcept;
+	FKMeans(const FInPoint* Restrict InPoints, const FInPoint* Restrict InInitCenters, FIndex InNumPoint, FIndex InNumCenter) noexcept;
 
 	~FKMeans() noexcept;
 
 	TVector<FIndex> Run(int NumIteration = 1000);
 };
 
-inline FKMeans::FKMeans(const TVector<FPoint>& InPoints, const TVector<FPoint>& InInitCenters) noexcept
-	: NumPoint(static_cast<FIndex>(InPoints.size()))
-	, NumCenter(static_cast<FIndex>(InInitCenters.size()))
+inline FKMeans::FKMeans(const FInPoint* Restrict InPoints, const FInPoint* Restrict InInitCenters, FIndex InNumPoint, FIndex InNumCenter) noexcept
+	: NumPoint(InNumPoint)
+	, NumCenter(InNumCenter)
 #if USE_OMP_NUM_THREAD
 	, NumThread(GetOmpDefaultNumThread())
 #endif
@@ -477,13 +489,13 @@ inline FKMeans::FKMeans(const TVector<FPoint>& InPoints, const TVector<FPoint>& 
 #else
 	PointCount = AllocArray<FIndex>(NumCenter);
 #endif
-	BuiltinMemCpy(Points, InPoints.data(), sizeof(FPoint) * NumPoint);
+	BuiltinMemCpy(Points, InPoints, sizeof(FPoint) * NumPoint);
 #if USE_SIMD_POINTS_SWIZZLE_AOT_COPY
 	SwizzlePoints(SwizzledPoints, Points, NumPoint);
 #elif USE_SIMD_POINTS_SWIZZLE_AOT
 	SwizzlePoints(Points, NumPoint);
 #endif
-	BuiltinMemCpy(Centers, InInitCenters.data(), sizeof(FPoint) * NumCenter);
+	BuiltinMemCpy(Centers, InInitCenters, sizeof(FPoint) * NumCenter);
 }
 
 FKMeans::~FKMeans() noexcept
@@ -935,7 +947,7 @@ JConverge:
 
 // Public interface
 Kmeans::Kmeans(const std::vector<Point>& InPoints, const std::vector<Point>& InInitCenters)
-	: Impl(new FKMeans(InPoints, InInitCenters))
+	: Impl(new FKMeans(InPoints.data(), InInitCenters.data(), InPoints.size(), InInitCenters.size()))
 {}
 
 std::vector<index_t> Kmeans::Run(int MaxIterations)

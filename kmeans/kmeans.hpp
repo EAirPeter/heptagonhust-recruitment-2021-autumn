@@ -9,20 +9,20 @@ using index_t = int;
 
 struct Point
 {
-	union
-	{
-		double x;
-		double X;
-	};
+	double x, y;
 
-	union
+	Point()
+		: x(0), y(0)
 	{
-		double y;
-		double Y;
-	};
+	}
 
-	Point() noexcept = default;
-	constexpr Point(double InX, double InY) noexcept : X(InX), Y(InY) {}
+	Point(int InX, int InY)
+		: x(InX), y(InY)
+	{
+	}
+
+	Point(const Point&) = default;
+	~Point() = default;
 
 	[[nodiscard]]
 	double Distance(const Point& Other) const noexcept;
