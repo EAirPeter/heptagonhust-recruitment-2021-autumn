@@ -1,36 +1,52 @@
 #ifndef __KMEANS_HPP_
 #define __KMEANS_HPP_
 
+#include <iosfwd>
+#include <memory>
 #include <vector>
-#include <iostream>
 
 using index_t = int;
 
-struct Point {
-  double x, y;
+struct Point
+{
+	double x, y;
 
-  Point() : x(0), y(0) {}
-  Point(int _x, int _y) : x(_x), y(_y) {}
-  Point(const Point &other) = default;
-  ~Point() = default;
+	Point()
+		: x(0), y(0)
+	{
+	}
 
-  [[nodiscard]] double Distance(const Point &other) const noexcept;
+	Point(int InX, int InY)
+		: x(InX), y(InY)
+	{
+	}
+
+	Point(const Point&) = default;
+	~Point() = default;
+
+	[[nodiscard]]
+	double Distance(const Point& Other) const noexcept;
 };
 
-class Kmeans {
+std::istream& operator>>(std::istream& LHS, Point& RHS);
+std::ostream& operator<<(std::ostream& LHS, const Point& RHS);
+
+struct FKMeans;
+
+struct FKMeansDeleter : std::default_delete<FKMeans>
+{
+	void operator()(FKMeans* Obj) const noexcept;
+};
+
+// Public interface
+class Kmeans
+{
 public:
-  Kmeans(const std::vector<Point> &points,
-         const std::vector<Point> &init_centers);
-  std::vector<index_t> Run(int max_iterations = 1000);
+	Kmeans(const std::vector<Point>& InPoints, const std::vector<Point>& InInitCenters);
+	std::vector<index_t> Run(int MaxIterations = 1000);
 
 private:
-  std::vector<Point> m_points;
-  std::vector<Point> m_centers;
-  int m_numPoints;
-  int m_numCenters;
+	std::unique_ptr<FKMeans, FKMeansDeleter> Impl;
 };
-
-std::istream &operator>>(std::istream &is, Point &pt);
-std::ostream &operator<<(std::ostream &os, Point &pt);
 
 #endif // __KMEANS_HPP_
