@@ -42,17 +42,14 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #define USE_SIMD_OPERATOR                  (1 && USE_SIMD) // 1
 #define USE_SIMD_DISTANCE                  (1 && USE_SIMD_OPERATOR) // 1
 #define USE_SIMD_UPDATE_ASSIGNMENT         (1 && USE_SIMD) // 1
-#define USE_SIMD_ASSIGNMENT_SWIZZLE        (0 && USE_SIMD) // 0
 #define USE_SIMD_CENTER_ID_ADD             (1 && USE_SIMD_UPDATE_ASSIGNMENT) // 1
-#define USE_SIMD_POINTS_SWIZZLE            (1 && USE_SIMD && !USE_SIMD_ASSIGNMENT_SWIZZLE) // 1
-#define USE_SIMD_POINTS_SWIZZLE_AOT        (0 && USE_SIMD_POINTS_SWIZZLE) // 0
-#define USE_SIMD_POINTS_SWIZZLE_AOT_COPY   (0 && USE_SIMD_POINTS_SWIZZLE_AOT) // 0
+#define USE_SIMD_POINTS_SWIZZLE            (1 && USE_SIMD) // 1
 #define USE_SIMD_FMA                       (1 && USE_SIMD_POINTS_SWIZZLE) // 1
 
 #define USE_OMP_NUM_THREAD                 (1 && USE_OMP)
 #define USE_OMP_UPDATE_ASSIGNMENT          (1 && USE_OMP) // 1
 #define USE_OMP_UPDATE_ASSIGNMENT_FINE     (0 && USE_OMP_UPDATE_ASSIGNMENT && USE_OMP_NUM_THREAD)
-#define USE_OMP_UPDATE_CENTERS             (0 && USE_OMP_NUM_THREAD && !USE_SIMD_ASSIGNMENT_SWIZZLE && (!USE_SIMD_POINTS_SWIZZLE_AOT || USE_SIMD_POINTS_SWIZZLE_AOT_COPY))
+#define USE_OMP_UPDATE_CENTERS             (0 && USE_OMP_NUM_THREAD)
 #define USE_OMP_PARALLEL_MEMSET            (0 && USE_OMP_UPDATE_CENTERS)
 
 #ifdef _MSC_VER
@@ -377,44 +374,6 @@ inline double GetDistance(const FPoint& Restrict LHS, const FPoint& Restrict RHS
 }
 #endif
 
-#if USE_SIMD_POINTS_SWIZZLE_AOT
-AttrPerf
-#if USE_SIMD_POINTS_SWIZZLE_AOT_COPY
-inline void SwizzlePoints(FPoint* Restrict SwizzledPoints, const FPoint* Restrict Points, FIndex NumPoint) noexcept
-#else
-inline void SwizzlePoints(FPoint* Restrict Points, FIndex NumPoint) noexcept
-#endif
-{
-	const FIndex NumPointForBatch = NumPoint & ~(BatchSize - 1);
-
-	for (FIndex PointId = 0; PointId < NumPointForBatch; PointId += BatchSize)
-	{
-		const __m256d VPoint01 = Load2(Points + PointId);
-		const __m256d VPoint23 = Load2(Points + PointId + 2);
-		const __m256d VPoint45 = Load2(Points + PointId + 4);
-		const __m256d VPoint67 = Load2(Points + PointId + 6);
-		const __m256d VPointX0213 = _mm256_unpacklo_pd(VPoint01, VPoint23);
-		const __m256d VPointY0213 = _mm256_unpackhi_pd(VPoint01, VPoint23);
-		const __m256d VPointX4657 = _mm256_unpacklo_pd(VPoint45, VPoint67);
-		const __m256d VPointY4657 = _mm256_unpackhi_pd(VPoint45, VPoint67);
-#if USE_SIMD_POINTS_SWIZZLE_AOT_COPY
-		Store2(SwizzledPoints + PointId, VPointX0213);
-		Store2(SwizzledPoints + PointId + 2, VPointY0213);
-		Store2(SwizzledPoints + PointId + 4, VPointX4657);
-		Store2(SwizzledPoints + PointId + 6, VPointY4657);
-#else
-		Store2(Points + PointId, VPointX0213);
-		Store2(Points + PointId + 2, VPointY0213);
-		Store2(Points + PointId + 4, VPointX4657);
-		Store2(Points + PointId + 6, VPointY4657);
-#endif
-	}
-#if USE_SIMD_POINTS_SWIZZLE_AOT_COPY
-	BuiltinMemCpy(SwizzledPoints + NumPointForBatch, Points + NumPointForBatch, sizeof(FPoint) * (NumPoint - NumPointForBatch));
-#endif
-}
-#endif
-
 #if USE_OMP_NUM_THREAD
 constexpr int OmpMaxNumThread = 64;
 
@@ -436,9 +395,6 @@ inline int GetOmpDefaultNumThread() noexcept
 struct FKMeans
 {
 	FPoint* Points = nullptr;
-#if USE_SIMD_POINTS_SWIZZLE_AOT_COPY
-	FPoint* SwizzledPoints = nullptr;
-#endif
 	FPoint* Centers = nullptr;
 	FIndex* Assignment = nullptr;
 	FIndex* OldAssignment = nullptr;
@@ -466,9 +422,6 @@ inline FKMeans::FKMeans(const FInPoint* Restrict InPoints, const FInPoint* Restr
 	SCOPED_TIMER(FKMeansConstructor);
 
 	Points = AllocArray<FPoint>(NumPoint);
-#if USE_SIMD_POINTS_SWIZZLE_AOT_COPY
-	SwizzledPoints = AllocArray<FPoint>(NumPoint);
-#endif
 #if USE_OMP_UPDATE_CENTERS
 	Centers = AllocArray<FPoint>(NumCenter * NumThread);
 #else
@@ -482,20 +435,12 @@ inline FKMeans::FKMeans(const FInPoint* Restrict InPoints, const FInPoint* Restr
 	PointCount = AllocArray<FIndex>(NumCenter);
 #endif
 	BuiltinMemCpy(Points, InPoints, sizeof(FPoint) * NumPoint);
-#if USE_SIMD_POINTS_SWIZZLE_AOT_COPY
-	SwizzlePoints(SwizzledPoints, Points, NumPoint);
-#elif USE_SIMD_POINTS_SWIZZLE_AOT
-	SwizzlePoints(Points, NumPoint);
-#endif
 	BuiltinMemCpy(Centers, InInitCenters, sizeof(FPoint) * NumCenter);
 }
 
 FKMeans::~FKMeans() noexcept
 {
 	FreeArray(Points);
-#if USE_SIMD_POINTS_SWIZZLE_AOT_COPY
-	FreeArray(SwizzledPoints);
-#endif
 	FreeArray(Centers);
 	FreeArray(Assignment);
 	FreeArray(OldAssignment);
@@ -510,29 +455,17 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 #if USE_SIMD_UPDATE_ASSIGNMENT
 	const FIndex NumPointForBatch = NumPoint & ~(BatchSize - 1);
 
-#if !USE_SIMD_ASSIGNMENT_SWIZZLE
 	const __m256i VPerm = _mm256_set_epi32(7, 3, 5, 1, 6, 2, 4, 0);
-#endif
 
 #if USE_SIMD_CENTER_ID_ADD
 	const __m256i VOne = _mm256_set1_epi32(1);
 #endif
 
 #if USE_OMP_UPDATE_ASSIGNMENT
-#if USE_SIMD_CENTER_ID_ADD
 	#pragma omp parallel for
-#else
-	#pragma omp parallel for
-#endif
 #endif
 	for (FIndex PointId = 0; PointId < NumPointForBatch; PointId += BatchSize)
 	{
-#if USE_SIMD_POINTS_SWIZZLE_AOT
-		const __m256d VPointX0213 = Load2(Points + PointId);
-		const __m256d VPointY0213 = Load2(Points + PointId + 2);
-		const __m256d VPointX4657 = Load2(Points + PointId + 4);
-		const __m256d VPointY4657 = Load2(Points + PointId + 6);
-#else
 		const __m256d VPoint01 = Load2(Points + PointId);
 		const __m256d VPoint23 = Load2(Points + PointId + 2);
 		const __m256d VPoint45 = Load2(Points + PointId + 4);
@@ -542,7 +475,6 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 		const __m256d VPointY0213 = _mm256_unpackhi_pd(VPoint01, VPoint23);
 		const __m256d VPointX4657 = _mm256_unpacklo_pd(VPoint45, VPoint67);
 		const __m256d VPointY4657 = _mm256_unpackhi_pd(VPoint45, VPoint67);
-#endif
 #endif
 		__m256d VMinDis0213 = _mm256_set1_pd(std::numeric_limits<double>::max());
 		__m256d VMinDis4657 = _mm256_set1_pd(std::numeric_limits<double>::max());
@@ -600,12 +532,8 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 			VAssign04261537 = _mm256_blendv_ps(VAssign04261537, VCenterId, VCmp04261537);
 #endif
 		}
-#if USE_SIMD_ASSIGNMENT_SWIZZLE
-		_mm256_store_ps(AssumeYmmAligned(reinterpret_cast<float*>(Assignment + PointId)), VAssign04261537);
-#else
 		const __m256 VAssign01234567 = _mm256_permutevar8x32_ps(VAssign04261537, VPerm);
 		_mm256_store_ps(AssumeYmmAligned(reinterpret_cast<float*>(Assignment + PointId)), VAssign01234567);
-#endif
 	}
 
 	for (FIndex PointId = NumPointForBatch; PointId < NumPoint; ++PointId)
@@ -728,112 +656,6 @@ inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount,
 {
 	SCOPED_TIMER(UpdateCenters);
 
-#if USE_SIMD_POINTS_SWIZZLE_AOT && !USE_SIMD_POINTS_SWIZZLE_AOT_COPY
-	{
-		SCOPED_TIMER(ZeroCenterAndPointCount)
-		BuiltinMemSet(Centers, 0, sizeof(FPoint) * NumCenter);
-		BuiltinMemSet(PointCount, 0, sizeof(FIndex) * NumCenter);
-	}
-
-	const FIndex NumPointForBatch = NumPoint & ~(BatchSize - 1);
-
-	for (FIndex PointId = 0; PointId < NumPointForBatch; PointId += BatchSize)
-	{
-		const __m256d VPointX0213 = Load2(Points + PointId);
-		const __m256d VPointY0213 = Load2(Points + PointId + 2);
-		const __m256d VPointX4657 = Load2(Points + PointId + 4);
-		const __m256d VPointY4657 = Load2(Points + PointId + 6);
-		const __m256d VPoint01 = _mm256_unpacklo_pd(VPointX0213, VPointY0213);
-		const __m256d VPoint23 = _mm256_unpackhi_pd(VPointX0213, VPointY0213);
-		const __m256d VPoint45 = _mm256_unpacklo_pd(VPointX4657, VPointY4657);
-		const __m256d VPoint67 = _mm256_unpackhi_pd(VPointX4657, VPointY4657);
-		const __m128d VPoint0 = _mm256_castpd256_pd128(VPoint01);
-		const __m128d VPoint1 = _mm256_extractf128_pd(VPoint01, 1);
-		const __m128d VPoint2 = _mm256_castpd256_pd128(VPoint23);
-		const __m128d VPoint3 = _mm256_extractf128_pd(VPoint23, 1);
-		const __m128d VPoint4 = _mm256_castpd256_pd128(VPoint45);
-		const __m128d VPoint5 = _mm256_extractf128_pd(VPoint45, 1);
-		const __m128d VPoint6 = _mm256_castpd256_pd128(VPoint67);
-		const __m128d VPoint7 = _mm256_extractf128_pd(VPoint67, 1);
-		const FIndex CenterId0 = Assignment[PointId];
-		const FIndex CenterId1 = Assignment[PointId + 1];
-		const FIndex CenterId2 = Assignment[PointId + 2];
-		const FIndex CenterId3 = Assignment[PointId + 3];
-		const FIndex CenterId4 = Assignment[PointId + 4];
-		const FIndex CenterId5 = Assignment[PointId + 5];
-		const FIndex CenterId6 = Assignment[PointId + 6];
-		const FIndex CenterId7 = Assignment[PointId + 7];
-		Store1(&Centers[CenterId0], _mm_add_pd(Load1(&Centers[CenterId0]), VPoint0));
-		Store1(&Centers[CenterId1], _mm_add_pd(Load1(&Centers[CenterId1]), VPoint1));
-		Store1(&Centers[CenterId2], _mm_add_pd(Load1(&Centers[CenterId2]), VPoint2));
-		Store1(&Centers[CenterId3], _mm_add_pd(Load1(&Centers[CenterId3]), VPoint3));
-		Store1(&Centers[CenterId4], _mm_add_pd(Load1(&Centers[CenterId4]), VPoint4));
-		Store1(&Centers[CenterId5], _mm_add_pd(Load1(&Centers[CenterId5]), VPoint5));
-		Store1(&Centers[CenterId6], _mm_add_pd(Load1(&Centers[CenterId6]), VPoint6));
-		Store1(&Centers[CenterId7], _mm_add_pd(Load1(&Centers[CenterId7]), VPoint7));
-		++PointCount[CenterId0];
-		++PointCount[CenterId1];
-		++PointCount[CenterId2];
-		++PointCount[CenterId3];
-		++PointCount[CenterId4];
-		++PointCount[CenterId5];
-		++PointCount[CenterId6];
-		++PointCount[CenterId7];
-	}
-
-	for (FIndex PointId = NumPointForBatch; PointId < NumPoint; ++PointId)
-	{
-		const FIndex CenterId = Assignment[PointId];
-		Centers[CenterId] += Points[PointId];
-		++PointCount[CenterId];
-	}
-
-	for (FIndex CenterId = 0; CenterId < NumCenter; ++CenterId)
-	{
-		Centers[CenterId] /= PointCount[CenterId];
-	}
-#elif USE_SIMD_ASSIGNMENT_SWIZZLE
-	{
-		SCOPED_TIMER(ZeroCenterAndPointCount)
-		BuiltinMemSet(Centers, 0, sizeof(FPoint) * NumCenter);
-		BuiltinMemSet(PointCount, 0, sizeof(FIndex) * NumCenter);
-	}
-
-	const FIndex NumPointForBatch = NumPoint & ~(BatchSize - 1);
-
-	for (FIndex PointId = 0; PointId < NumPointForBatch; PointId += BatchSize)
-	{
-		const FIndex SubAssign[8]
-		{
-			Assignment[PointId + 0],
-			Assignment[PointId + 4],
-			Assignment[PointId + 2],
-			Assignment[PointId + 6],
-			Assignment[PointId + 1],
-			Assignment[PointId + 5],
-			Assignment[PointId + 3],
-			Assignment[PointId + 7],
-		};
-		for (FIndex SubPointId = 0; SubPointId < BatchSize; ++SubPointId)
-		{
-			const FIndex CenterId = SubAssign[SubPointId];
-			Centers[CenterId] += Points[PointId + SubPointId];
-			++PointCount[CenterId];
-		}
-	}
-
-	for (FIndex PointId = NumPointForBatch; PointId < NumPoint; ++PointId)
-	{
-		const FIndex CenterId = Assignment[PointId];
-		Centers[CenterId] += Points[PointId];
-		++PointCount[CenterId];
-	}
-
-	for (FIndex CenterId = 0; CenterId < NumCenter; ++CenterId)
-	{
-		Centers[CenterId] /= PointCount[CenterId];
-	}
-#else
 	{
 		SCOPED_TIMER(ZeroCenterAndPointCount);
 		BuiltinMemSet(Centers, 0, sizeof(FPoint) * NumCenter);
@@ -857,7 +679,6 @@ inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount,
 			Centers[CenterId] /= PointCount[CenterId];
 		}
 	}
-#endif
 }
 #endif
 
@@ -865,19 +686,6 @@ AttrPerf
 inline TVector<FIndex> FinalizeAssignment(FIndex* Restrict Assignment, FIndex NumPoint) noexcept
 {
 	SCOPED_TIMER(FinalizeAssignment);
-
-#if USE_SIMD_ASSIGNMENT_SWIZZLE
-	const FIndex NumPointForBatch = NumPoint & ~(BatchSize - 1);
-
-	const __m256i VPerm = _mm256_set_epi32(7, 3, 5, 1, 6, 2, 4, 0);
-
-	for (FIndex PointId = 0; PointId < NumPointForBatch; PointId += BatchSize)
-	{
-		const __m256 VAssign04261537 = _mm256_load_ps(AssumeYmmAligned(reinterpret_cast<float*>(Assignment + PointId)));
-		const __m256 VResult01234567 = _mm256_permutevar8x32_ps(VAssign04261537, VPerm);
-		_mm256_store_ps(AssumeYmmAligned(reinterpret_cast<float*>(Assignment + PointId)), VResult01234567);
-	}
-#endif
 
 	return {Assignment, Assignment + NumPoint};
 }
@@ -900,11 +708,7 @@ TVector<FIndex> FKMeans::Run(int NumIteration)
 	{
 		++IterationId;
 
-#if USE_SIMD_POINTS_SWIZZLE_AOT_COPY
-		UpdateAssignment(Assignment, SwizzledPoints, Centers, NumPoint, NumCenter);
-#else
 		UpdateAssignment(Assignment, Points, Centers, NumPoint, NumCenter);
-#endif
 
 #if !USE_FIX_NUM_ITERATION
 		{
