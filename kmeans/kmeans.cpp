@@ -29,7 +29,7 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 
 #define USE_CHECK 1
 #define USE_PERF 1
-#define USE_STATS 1
+#define USE_STATS 0
 
 #define USE_OMP 1
 #define USE_SIMD 1
@@ -108,6 +108,8 @@ constexpr std::size_t VecAlignment = 64;
 	E(FKMeansRun) \
 	E(UpdateAssignment) \
 	E(UpdateCenters) \
+	E(UpdateCenters_Gather) \
+	E(UpdateCenters_Division) \
 	E(CompareForQuit) \
 	E(ZeroCenterAndPointCount) \
 	E(FinalizeAssignment)
@@ -125,6 +127,32 @@ namespace StatsImpl
 
 	template<EStat Stat>
 	static std::atomic_int64_t GAccumulator;
+
+	template<EStat Stat>
+	struct TStatTimer
+	{
+		high_resolution_clock::time_point TimeStart;
+		int64_t TotalNumNanosecond = 0;
+
+		~TStatTimer() noexcept
+		{
+			if (TotalNumNanosecond)
+			{
+				GAccumulator<Stat>.fetch_add(TotalNumNanosecond, std::memory_order_relaxed);
+			}
+		}
+
+		void Start() noexcept
+		{
+			TimeStart = high_resolution_clock::now();
+		}
+
+		void Stop() noexcept
+		{
+			const high_resolution_clock::time_point End = high_resolution_clock::now();
+			TotalNumNanosecond += std::chrono::duration_cast<std::chrono::nanoseconds>(End - TimeStart).count();
+		}
+	};
 
 	template<EStat Stat>
 	struct TScopedStatTimer
@@ -163,10 +191,15 @@ namespace StatsImpl
 	static FStatPrinter GStatPrinter;
 }
 
-#define SCOPED_TIMER(Stat) ::StatsImpl::TScopedStatTimer<::StatsImpl::EStat::Stat> Timer ## __LINE__;
+#define SCOPED_TIMER(Stat) ::StatsImpl::TScopedStatTimer<::StatsImpl::EStat::Stat> Timer ## __LINE__
+#define STAT_TIMER(Stat, Name) ::StatsImpl::TStatTimer<::StatsImpl::EStat::Stat> Name
+#define STAT_START(Timer) Timer.Start()
+#define STAT_STOP(Timer) Timer.Stop()
 
 #else
 #define SCOPED_TIMER(...)
+#define STAT_START(...)
+#define STAT_STOP(...)
 #endif
 
 using FIndex = ::index_t;
@@ -622,7 +655,7 @@ inline void UpdateCenters(FPoint* Restrict PerThreadCenters, FIndex* Restrict Pe
 
 #if !USE_OMP_PARALLEL_MEMSET
 	{
-		SCOPED_TIMER(ZeroCenterAndPointCount)
+		SCOPED_TIMER(ZeroCenterAndPointCount);
 		BuiltinMemSet(PerThreadCenters, 0, sizeof(FPoint) * NumCenter * NumThread);
 		BuiltinMemSet(PerThreadPointCount, 0, sizeof(FIndex) * NumCenter * NumThread);
 	}
@@ -641,23 +674,28 @@ inline void UpdateCenters(FPoint* Restrict PerThreadCenters, FIndex* Restrict Pe
 
 #if USE_OMP_PARALLEL_MEMSET
 			{
-				SCOPED_TIMER(ZeroCenterAndPointCount)
+				SCOPED_TIMER(ZeroCenterAndPointCount);
 				BuiltinMemSet(LocalCenters, 0, sizeof(FPoint) * NumCenter);
 				BuiltinMemSet(LocalPointCount, 0, sizeof(FIndex) * NumCenter);
 			}
 #endif
 
-			for (FIndex PointId = PointIdBegin; PointId < PointIdEnd; ++PointId)
 			{
-				const FIndex CenterId = Assignment[PointId];
-				LocalCenters[CenterId] += Points[PointId];
-				++LocalPointCount[CenterId];
+				SCOPED_TIMER(UpdateCenters_Gather);
+				for (FIndex PointId = PointIdBegin; PointId < PointIdEnd; ++PointId)
+				{
+					const FIndex CenterId = Assignment[PointId];
+					LocalCenters[CenterId] += Points[PointId];
+					++LocalPointCount[CenterId];
+				}
 			}
 		}
 
 		#pragma omp barrier
 
 		{
+			SCOPED_TIMER(UpdateCenters_Division);
+
 			const FIndex LocalNumCenter = ThreadId < NumCenterModThread ? NumCenterDivThread + 1 : NumCenterDivThread;
 			const FIndex CenterIdBegin = ThreadId < NumCenterModThread ? ThreadId * LocalNumCenter : ThreadId * LocalNumCenter + NumCenterModThread;
 			const FIndex CenterIdEnd = CenterIdBegin + LocalNumCenter;
@@ -800,21 +838,27 @@ inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount,
 	}
 #else
 	{
-		SCOPED_TIMER(ZeroCenterAndPointCount)
+		SCOPED_TIMER(ZeroCenterAndPointCount);
 		BuiltinMemSet(Centers, 0, sizeof(FPoint) * NumCenter);
 		BuiltinMemSet(PointCount, 0, sizeof(FIndex) * NumCenter);
 	}
 
-	for (FIndex PointId = 0; PointId < NumPoint; ++PointId)
 	{
-		const FIndex CenterId = Assignment[PointId];
-		Centers[CenterId] += Points[PointId];
-		++PointCount[CenterId];
+		SCOPED_TIMER(UpdateCenters_Gather);
+		for (FIndex PointId = 0; PointId < NumPoint; ++PointId)
+		{
+			const FIndex CenterId = Assignment[PointId];
+			Centers[CenterId] += Points[PointId];
+			++PointCount[CenterId];
+		}
 	}
 
-	for (FIndex CenterId = 0; CenterId < NumCenter; ++CenterId)
 	{
-		Centers[CenterId] /= PointCount[CenterId];
+		SCOPED_TIMER(UpdateCenters_Division);
+		for (FIndex CenterId = 0; CenterId < NumCenter; ++CenterId)
+		{
+			Centers[CenterId] /= PointCount[CenterId];
+		}
 	}
 #endif
 }
