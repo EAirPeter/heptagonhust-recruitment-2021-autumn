@@ -52,8 +52,8 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #define USE_OMP_PARALLEL_MEMSET            (0 && USE_OMP_UPDATE_CENTERS)
 
 #ifdef _MSC_VER
-#define AttrForceInline __forceinline
 #define AttrNoInline __declspec(noinline)
+#define ForceInline __forceinline
 #define VectorCall __vectorcall
 #define Restrict __restrict
 #define BuiltinMemCmp __builtin_memcmp
@@ -61,8 +61,8 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #define BuiltinMemSet memset
 #define BuiltinAssumeAligned __builtin_assume_aligned
 #else
-#define AttrForceInline __attribute__((always_inline))
 #define AttrNoInline __attribute__((noinline))
+#define ForceInline __attribute__((always_inline)) inline
 #define VectorCall
 #define Restrict __restrict__
 #define BuiltinMemCmp __builtin_memcmp
@@ -218,15 +218,13 @@ FPoint
 	double Y;
 
 #if USE_SIMD_OPERATOR
-	AttrForceInline
-	inline VectorCall
+	ForceInline	VectorCall
 	operator __m128d() const noexcept
 	{
 		return _mm_load_pd(AssumeXmmAligned(reinterpret_cast<const double*>(this)));
 	}
 
-	AttrForceInline
-	inline FPoint& VectorCall
+	ForceInline	FPoint& VectorCall
 	operator=(__m128d InVec) noexcept
 	{
 		_mm_store_pd(AssumeXmmAligned(reinterpret_cast<double*>(this)), InVec);
@@ -246,8 +244,7 @@ constexpr FIndex BatchSize = 8;
 #endif
 
 template<class T>
-AttrForceInline
-inline T* AllocArray(std::size_t Num) noexcept
+ForceInline T* AllocArray(std::size_t Num) noexcept
 {
 #if USE_SIMD
 	T* Ptr = AssumeVecAligned(static_cast<T*>(operator new(sizeof(T) * Num, static_cast<std::align_val_t>(VecAlignment), std::nothrow)));
@@ -260,8 +257,7 @@ inline T* AllocArray(std::size_t Num) noexcept
 }
 
 template<class T>
-AttrForceInline
-inline void FreeArray(T* Ptr) noexcept
+ForceInline void FreeArray(T* Ptr) noexcept
 {
 #if USE_SIMD
 	operator delete(AssumeVecAligned(Ptr), static_cast<std::align_val_t>(VecAlignment), std::nothrow);
@@ -273,39 +269,35 @@ inline void FreeArray(T* Ptr) noexcept
 #if USE_SIMD
 
 #ifdef _MSC_VER
-AttrForceInline inline __m128d VectorCall operator+(__m128d LHS, __m128d RHS) noexcept { return _mm_add_pd(LHS, RHS); }
-AttrForceInline inline __m128d VectorCall operator-(__m128d LHS, __m128d RHS) noexcept { return _mm_sub_pd(LHS, RHS); }
-AttrForceInline inline __m128d VectorCall operator*(__m128d LHS, double RHS) noexcept { return _mm_mul_pd(LHS, _mm_set1_pd(RHS)); }
-AttrForceInline inline __m128d VectorCall operator/(__m128d LHS, double RHS) noexcept { return _mm_div_pd(LHS, _mm_set1_pd(RHS)); }
-AttrForceInline inline __m128d& VectorCall operator+=(__m128d& LHS, __m128d RHS) noexcept { return LHS = _mm_add_pd(LHS, RHS); }
-AttrForceInline inline __m128d& VectorCall operator-=(__m128d& LHS, __m128d RHS) noexcept { return LHS = _mm_sub_pd(LHS, RHS); }
-AttrForceInline inline __m128d& VectorCall operator*=(__m128d& LHS, double RHS) noexcept { return LHS = _mm_mul_pd(LHS, _mm_set1_pd(RHS)); }
-AttrForceInline inline __m128d& VectorCall operator/=(__m128d& LHS, double RHS) noexcept { return LHS = _mm_div_pd(LHS, _mm_set1_pd(RHS)); }
+ForceInline __m128d VectorCall operator+(__m128d LHS, __m128d RHS) noexcept { return _mm_add_pd(LHS, RHS); }
+ForceInline __m128d VectorCall operator-(__m128d LHS, __m128d RHS) noexcept { return _mm_sub_pd(LHS, RHS); }
+ForceInline __m128d VectorCall operator*(__m128d LHS, double RHS) noexcept { return _mm_mul_pd(LHS, _mm_set1_pd(RHS)); }
+ForceInline __m128d VectorCall operator/(__m128d LHS, double RHS) noexcept { return _mm_div_pd(LHS, _mm_set1_pd(RHS)); }
+ForceInline __m128d& VectorCall operator+=(__m128d& LHS, __m128d RHS) noexcept { return LHS = _mm_add_pd(LHS, RHS); }
+ForceInline __m128d& VectorCall operator-=(__m128d& LHS, __m128d RHS) noexcept { return LHS = _mm_sub_pd(LHS, RHS); }
+ForceInline __m128d& VectorCall operator*=(__m128d& LHS, double RHS) noexcept { return LHS = _mm_mul_pd(LHS, _mm_set1_pd(RHS)); }
+ForceInline __m128d& VectorCall operator/=(__m128d& LHS, double RHS) noexcept { return LHS = _mm_div_pd(LHS, _mm_set1_pd(RHS)); }
 #endif
 
-AttrForceInline
-inline __m128d VectorCall
+ForceInline __m128d VectorCall
 Load1(const FPoint* Restrict Point) noexcept
 {
 	return _mm_load_pd(AssumeXmmAligned(reinterpret_cast<const double*>(Point)));
 }
 
-AttrForceInline
-inline __m256d VectorCall
+ForceInline __m256d VectorCall
 Load2(const FPoint* Restrict Point) noexcept
 {
 	return _mm256_load_pd(AssumeYmmAligned(reinterpret_cast<const double*>(Point)));
 }
 
-AttrForceInline
-inline void VectorCall
+ForceInline void VectorCall
 Store1(FPoint* Restrict Point, __m128d Vector) noexcept
 {
 	_mm_store_pd(AssumeXmmAligned(reinterpret_cast<double*>(Point)), Vector);
 }
 
-AttrForceInline
-inline void VectorCall
+ForceInline void VectorCall
 Store2(FPoint* Restrict Point, __m256d Vector) noexcept
 {
 	_mm256_store_pd(AssumeYmmAligned(reinterpret_cast<double*>(Point)), Vector);
@@ -318,51 +310,48 @@ Store2(FPoint* Restrict Point, __m256d Vector) noexcept
 using FLocalPoint = __m128d;
 using FConstLocalPointRef = const __m128d;
 
-AttrForceInline
-inline __m128d VectorCall
+ForceInline __m128d VectorCall
 MakeZeroLocalPoint() noexcept
 {
 	return _mm_setzero_pd();
 }
 
 #ifndef _MSC_VER
-AttrForceInline inline __m128d operator+(const FPoint& LHS, const FPoint& RHS) noexcept { return static_cast<__m128d>(LHS) + static_cast<__m128d>(RHS); }
-AttrForceInline inline __m128d operator-(const FPoint& LHS, const FPoint& RHS) noexcept { return static_cast<__m128d>(LHS) - static_cast<__m128d>(RHS); }
-AttrForceInline inline __m128d operator+(const FPoint& LHS, __m128d RHS) noexcept { return static_cast<__m128d>(LHS) + RHS; }
-AttrForceInline inline __m128d operator-(const FPoint& LHS, __m128d RHS) noexcept { return static_cast<__m128d>(LHS) - RHS; }
-AttrForceInline inline __m128d operator*(const FPoint& LHS, double RHS) noexcept { return static_cast<__m128d>(LHS) * _mm_set1_pd(RHS); }
-AttrForceInline inline __m128d operator/(const FPoint& LHS, double RHS) noexcept { return static_cast<__m128d>(LHS) / _mm_set1_pd(RHS); }
-AttrForceInline inline __m128d operator+(__m128d LHS, const FPoint& RHS) noexcept { return LHS + static_cast<__m128d>(RHS); }
-AttrForceInline inline __m128d operator-(__m128d LHS, const FPoint& RHS) noexcept { return LHS - static_cast<__m128d>(RHS); }
-AttrForceInline inline __m128d& operator+=(__m128d& LHS, const FPoint& RHS) noexcept { return LHS += static_cast<__m128d>(RHS); }
-AttrForceInline inline __m128d& operator-=(__m128d& LHS, const FPoint& RHS) noexcept { return LHS -= static_cast<__m128d>(RHS); }
+ForceInline __m128d operator+(const FPoint& LHS, const FPoint& RHS) noexcept { return static_cast<__m128d>(LHS) + static_cast<__m128d>(RHS); }
+ForceInline __m128d operator-(const FPoint& LHS, const FPoint& RHS) noexcept { return static_cast<__m128d>(LHS) - static_cast<__m128d>(RHS); }
+ForceInline __m128d operator+(const FPoint& LHS, __m128d RHS) noexcept { return static_cast<__m128d>(LHS) + RHS; }
+ForceInline __m128d operator-(const FPoint& LHS, __m128d RHS) noexcept { return static_cast<__m128d>(LHS) - RHS; }
+ForceInline __m128d operator*(const FPoint& LHS, double RHS) noexcept { return static_cast<__m128d>(LHS) * _mm_set1_pd(RHS); }
+ForceInline __m128d operator/(const FPoint& LHS, double RHS) noexcept { return static_cast<__m128d>(LHS) / _mm_set1_pd(RHS); }
+ForceInline __m128d operator+(__m128d LHS, const FPoint& RHS) noexcept { return LHS + static_cast<__m128d>(RHS); }
+ForceInline __m128d operator-(__m128d LHS, const FPoint& RHS) noexcept { return LHS - static_cast<__m128d>(RHS); }
+ForceInline __m128d& operator+=(__m128d& LHS, const FPoint& RHS) noexcept { return LHS += static_cast<__m128d>(RHS); }
+ForceInline __m128d& operator-=(__m128d& LHS, const FPoint& RHS) noexcept { return LHS -= static_cast<__m128d>(RHS); }
 #endif
 
-AttrForceInline inline FPoint& operator+=(FPoint& LHS, __m128d RHS) noexcept { return LHS = static_cast<__m128d>(LHS) + RHS; }
-AttrForceInline inline FPoint& operator-=(FPoint& LHS, __m128d RHS) noexcept { return LHS = static_cast<__m128d>(LHS) - RHS; }
-AttrForceInline inline FPoint& operator*=(FPoint& LHS, double RHS) noexcept { return LHS = static_cast<__m128d>(LHS) * RHS; }
-AttrForceInline inline FPoint& operator/=(FPoint& LHS, double RHS) noexcept { return LHS = static_cast<__m128d>(LHS) / RHS; }
+ForceInline FPoint& operator+=(FPoint& LHS, __m128d RHS) noexcept { return LHS = static_cast<__m128d>(LHS) + RHS; }
+ForceInline FPoint& operator-=(FPoint& LHS, __m128d RHS) noexcept { return LHS = static_cast<__m128d>(LHS) - RHS; }
+ForceInline FPoint& operator*=(FPoint& LHS, double RHS) noexcept { return LHS = static_cast<__m128d>(LHS) * RHS; }
+ForceInline FPoint& operator/=(FPoint& LHS, double RHS) noexcept { return LHS = static_cast<__m128d>(LHS) / RHS; }
 
 #else
 
 using FLocalPoint = FPoint;
 using FConstLocalPointRef = const FPoint&;
 
-AttrForceInline
-inline FPoint
-MakeZeroLocalPoint() noexcept
+ForceInline FPoint MakeZeroLocalPoint() noexcept
 {
 	return {0.0, 0.0};
 }
 
-AttrForceInline inline FPoint operator+(const FPoint& LHS, const FPoint& RHS) noexcept { return {LHS.X + RHS.X, LHS.Y + RHS.Y}; }
-AttrForceInline inline FPoint operator-(const FPoint& LHS, const FPoint& RHS) noexcept { return {LHS.X - RHS.X, LHS.Y - RHS.Y}; }
-AttrForceInline inline FPoint operator*(const FPoint& LHS, double RHS) noexcept { return {LHS.X * RHS, LHS.Y * RHS}; }
-AttrForceInline inline FPoint operator/(const FPoint& LHS, double RHS) noexcept { return {LHS.X / RHS, LHS.Y / RHS}; }
-AttrForceInline inline FPoint& operator+=(FPoint& LHS, const FPoint& RHS) noexcept { return LHS.X += RHS.X, LHS.Y += RHS.Y, LHS; }
-AttrForceInline inline FPoint& operator-=(FPoint& LHS, const FPoint& RHS) noexcept { return LHS.X -= RHS.X, LHS.Y -= RHS.Y, LHS; }
-AttrForceInline inline FPoint& operator*=(FPoint& LHS, double RHS) noexcept { return LHS.X *= RHS, LHS.Y *= RHS, LHS; }
-AttrForceInline inline FPoint& operator/=(FPoint& LHS, double RHS) noexcept { return LHS.X /= RHS, LHS.Y /= RHS, LHS; }
+ForceInline FPoint operator+(const FPoint& LHS, const FPoint& RHS) noexcept { return {LHS.X + RHS.X, LHS.Y + RHS.Y}; }
+ForceInline FPoint operator-(const FPoint& LHS, const FPoint& RHS) noexcept { return {LHS.X - RHS.X, LHS.Y - RHS.Y}; }
+ForceInline FPoint operator*(const FPoint& LHS, double RHS) noexcept { return {LHS.X * RHS, LHS.Y * RHS}; }
+ForceInline FPoint operator/(const FPoint& LHS, double RHS) noexcept { return {LHS.X / RHS, LHS.Y / RHS}; }
+ForceInline FPoint& operator+=(FPoint& LHS, const FPoint& RHS) noexcept { return LHS.X += RHS.X, LHS.Y += RHS.Y, LHS; }
+ForceInline FPoint& operator-=(FPoint& LHS, const FPoint& RHS) noexcept { return LHS.X -= RHS.X, LHS.Y -= RHS.Y, LHS; }
+ForceInline FPoint& operator*=(FPoint& LHS, double RHS) noexcept { return LHS.X *= RHS, LHS.Y *= RHS, LHS; }
+ForceInline FPoint& operator/=(FPoint& LHS, double RHS) noexcept { return LHS.X /= RHS, LHS.Y /= RHS, LHS; }
 
 #endif
 
@@ -946,7 +935,7 @@ JConverge:
 
 // Public interface
 Kmeans::Kmeans(const std::vector<Point>& InPoints, const std::vector<Point>& InInitCenters)
-	: Impl(new FKMeans(InPoints.data(), InInitCenters.data(), InPoints.size(), InInitCenters.size()))
+	: Impl(new FKMeans(InPoints.data(), InInitCenters.data(), static_cast<FIndex>(InPoints.size()), static_cast<FIndex>(InInitCenters.size())))
 {}
 
 std::vector<index_t> Kmeans::Run(int MaxIterations)
