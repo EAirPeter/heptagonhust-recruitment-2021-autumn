@@ -32,10 +32,10 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #define USE_PERF 1
 #define USE_STATS 0
 
-#define USE_OMP 1
+#define USE_OMP 0
 #define USE_SIMD 1
 
-#define USE_SIMD_OPERATOR                  (1 && USE_SIMD) // 1
+//#define USE_SIMD_OPERATOR                  (1 && USE_SIMD) // 1
 #define USE_SIMD_DISTANCE                  (1 && USE_SIMD) // 1
 #define USE_SIMD_UPDATE_ASSIGNMENT         (1 && USE_SIMD) // 1
 #define USE_SIMD_ASSIGNMENT_SWIZZLE        (0 && USE_SIMD) // 0
@@ -206,15 +206,80 @@ namespace StatsImpl
 using FIndex = ::index_t;
 using FInPoint = ::Point;
 
+enum EZeroInit { ZeroInit };
+
 struct
 #if USE_SIMD
 alignas(XmmAlignment)
 #endif
 FPoint
 {
-	double X;
-	double Y;
+#if USE_SIMD
+	union
+	{
+		__m128d Vec;
+		struct
+		{
+			double X, Y;
+		};
+	};
+#else
+	double X, Y;
+#endif
+
+
+	AttrForceInline inline FPoint() noexcept = default;
+
+#if USE_SIMD
+	// NOTE: VectorCall is not compatible with constructors
+	AttrForceInline inline FPoint(EZeroInit) noexcept : Vec(_mm_setzero_pd()) {}
+	AttrForceInline inline FPoint(__m128d InVec) noexcept : Vec(InVec) {}
+#else
+	AttrForceInline inline FPoint(EZeroInit) noexcept : X(0.0), Y(0.0) {}
+#endif
+
+#if USE_SIMD
+	AttrForceInline inline VectorCall operator __m128d() const noexcept { return Vec; }
+#endif
 };
+
+#if USE_SIMD
+AttrForceInline inline FPoint VectorCall operator +(FPoint LHS, FPoint RHS) noexcept { return _mm_add_pd(LHS, RHS); }
+AttrForceInline inline FPoint VectorCall operator -(FPoint LHS, FPoint RHS) noexcept { return _mm_sub_pd(LHS, RHS); }
+AttrForceInline inline FPoint VectorCall operator *(FPoint LHS, double RHS) noexcept { return _mm_mul_pd(LHS, _mm_set1_pd(RHS)); }
+AttrForceInline inline FPoint VectorCall operator /(FPoint LHS, double RHS) noexcept { return _mm_div_pd(LHS, _mm_set1_pd(RHS)); }
+AttrForceInline inline FPoint& VectorCall operator +=(FPoint& LHS, FPoint RHS) noexcept { return LHS = _mm_add_pd(LHS, RHS); }
+AttrForceInline inline FPoint& VectorCall operator -=(FPoint& LHS, FPoint RHS) noexcept { return LHS = _mm_sub_pd(LHS, RHS); }
+AttrForceInline inline FPoint& VectorCall operator *=(FPoint& LHS, double RHS) noexcept { return LHS = _mm_mul_pd(LHS, _mm_set1_pd(RHS)); }
+AttrForceInline inline FPoint& VectorCall operator /=(FPoint& LHS, double RHS) noexcept { return LHS = _mm_div_pd(LHS, _mm_set1_pd(RHS)); }
+#else
+AttrForceInline inline FPoint operator+(const FPoint& LHS, const FPoint& RHS) noexcept { return {LHS.X + RHS.X, LHS.Y + RHS.Y}; }
+AttrForceInline inline FPoint operator-(const FPoint& LHS, const FPoint& RHS) noexcept { return {LHS.X - RHS.X, LHS.Y - RHS.Y}; }
+AttrForceInline inline FPoint& operator+=(FPoint& LHS, const FPoint& RHS) noexcept
+{
+	LHS.X += RHS.X;
+	LHS.Y += RHS.Y;
+	return LHS;
+}
+AttrForceInline inline FPoint& operator-=(FPoint& LHS, const FPoint& RHS) noexcept
+{
+	LHS.X -= RHS.X;
+	LHS.Y -= RHS.Y;
+	return LHS;
+}
+AttrForceInline inline FPoint& operator*=(FPoint& LHS, double RHS) noexcept
+{
+	LHS.X *= RHS;
+	LHS.Y *= RHS;
+	return LHS;
+}
+AttrForceInline inline FPoint& operator/=(FPoint& LHS, double RHS) noexcept
+{
+	LHS.X /= RHS;
+	LHS.Y /= RHS;
+	return LHS;
+}
+#endif
 
 static_assert(sizeof(FInPoint) == sizeof(FPoint));
 static_assert(std::conjunction_v<std::is_trivial<FPoint>, std::is_standard_layout<FPoint>>);
@@ -257,14 +322,16 @@ AttrForceInline
 inline __m128d VectorCall
 Load1(const FPoint& Restrict Point) noexcept
 {
-	return _mm_load_pd(AssumeXmmAligned(reinterpret_cast<const double*>(&Point)));
+	return Point;
+	//return _mm_load_pd(AssumeXmmAligned(reinterpret_cast<const double*>(&Point)));
 }
 
 AttrForceInline
 inline __m128d VectorCall
 Load1(const FPoint* Restrict Point) noexcept
 {
-	return _mm_load_pd(AssumeXmmAligned(reinterpret_cast<const double*>(Point)));
+	return *Point;
+	//return _mm_load_pd(AssumeXmmAligned(reinterpret_cast<const double*>(Point)));
 }
 
 AttrForceInline
@@ -278,14 +345,16 @@ AttrForceInline
 inline void VectorCall
 Store1(FPoint& Restrict Point, __m128d Vector) noexcept
 {
-	_mm_store_pd(AssumeXmmAligned(reinterpret_cast<double*>(&Point)), Vector);
+	Point = Vector;
+	//_mm_store_pd(AssumeXmmAligned(reinterpret_cast<double*>(&Point)), Vector);
 }
 
 AttrForceInline
 inline void VectorCall
 Store1(FPoint* Restrict Point, __m128d Vector) noexcept
 {
-	_mm_store_pd(AssumeXmmAligned(reinterpret_cast<double*>(Point)), Vector);
+	*Point = Vector;
+	//_mm_store_pd(AssumeXmmAligned(reinterpret_cast<double*>(Point)), Vector);
 }
 
 AttrForceInline
@@ -295,74 +364,17 @@ Store2(FPoint* Restrict Point, __m256d Vector) noexcept
 	_mm256_store_pd(AssumeYmmAligned(reinterpret_cast<double*>(Point)), Vector);
 }
 
+#ifdef _MSC_VER
+AttrForceInline inline __m128d VectorCall operator +(__m128d LHS, __m128d RHS) noexcept { return _mm_add_pd(LHS, RHS); }
+AttrForceInline inline __m128d VectorCall operator -(__m128d LHS, __m128d RHS) noexcept { return _mm_sub_pd(LHS, RHS); }
+AttrForceInline inline __m128d VectorCall operator *(__m128d LHS, double RHS) noexcept { return _mm_mul_pd(LHS, _mm_set1_pd(RHS)); }
+AttrForceInline inline __m128d VectorCall operator /(__m128d LHS, double RHS) noexcept { return _mm_div_pd(LHS, _mm_set1_pd(RHS)); }
+AttrForceInline inline __m128d& VectorCall operator +=(__m128d& LHS, __m128d RHS) noexcept { return LHS = _mm_add_pd(LHS, RHS); }
+AttrForceInline inline __m128d& VectorCall operator -=(__m128d& LHS, __m128d RHS) noexcept { return LHS = _mm_sub_pd(LHS, RHS); }
+AttrForceInline inline __m128d& VectorCall operator *=(__m128d& LHS, double RHS) noexcept { return LHS = _mm_mul_pd(LHS, _mm_set1_pd(RHS)); }
+AttrForceInline inline __m128d& VectorCall operator /=(__m128d& LHS, double RHS) noexcept { return LHS = _mm_div_pd(LHS, _mm_set1_pd(RHS)); }
 #endif
 
-#if USE_SIMD_OPERATOR
-inline FPoint operator+(const FPoint& LHS, const FPoint& RHS) noexcept
-{
-	alignas(XmmAlignment) FPoint Result;
-	Store1(Result, _mm_add_pd(Load1(LHS), Load1(RHS)));
-	return Result;
-}
-inline FPoint operator-(const FPoint& LHS, const FPoint& RHS) noexcept
-{
-	alignas(XmmAlignment) FPoint Result;
-	Store1(Result, _mm_sub_pd(Load1(LHS), Load1(RHS)));
-	return Result;
-}
-inline FPoint& operator+=(FPoint& LHS, const FPoint& RHS) noexcept
-{
-	Store1(LHS, _mm_add_pd(Load1(LHS), Load1(RHS)));
-	return LHS;
-}
-inline FPoint& operator-=(FPoint& LHS, const FPoint& RHS) noexcept
-{
-	Store1(LHS, _mm_sub_pd(Load1(LHS), Load1(RHS)));
-	return LHS;
-}
-inline FPoint& operator*=(FPoint& LHS, double RHS) noexcept
-{
-	Store1(LHS, _mm_mul_pd(Load1(LHS), _mm_set1_pd(RHS)));
-	return LHS;
-}
-inline FPoint& operator/=(FPoint& LHS, double RHS) noexcept
-{
-	Store1(LHS, _mm_div_pd(Load1(LHS), _mm_set1_pd(RHS)));
-	return LHS;
-}
-#else
-inline FPoint operator+(const FPoint& LHS, const FPoint& RHS) noexcept
-{
-	return {LHS.X + RHS.X, LHS.Y + RHS.Y};
-}
-inline FPoint operator-(const FPoint& LHS, const FPoint& RHS) noexcept
-{
-	return {LHS.X - RHS.X, LHS.Y - RHS.Y};
-}
-inline FPoint& operator+=(FPoint& LHS, const FPoint& RHS) noexcept
-{
-	LHS.X += RHS.X;
-	LHS.Y += RHS.Y;
-	return LHS;
-}
-inline FPoint& operator-=(FPoint& LHS, const FPoint& RHS) noexcept
-{
-	LHS.X -= RHS.X;
-	LHS.Y -= RHS.Y;
-	return LHS;
-}
-inline FPoint& operator*=(FPoint& LHS, double RHS) noexcept
-{
-	LHS.X *= RHS;
-	LHS.Y *= RHS;
-	return LHS;
-}
-inline FPoint& operator/=(FPoint& LHS, double RHS) noexcept
-{
-	LHS.X /= RHS;
-	LHS.Y /= RHS;
-	return LHS;
-}
 #endif
 
 #if USE_SIMD_DISTANCE
@@ -714,7 +726,7 @@ inline void UpdateCenters(FPoint* Restrict PerThreadCenters, FIndex* Restrict Pe
 
 			for (FIndex CenterId = CenterIdBegin; CenterId < CenterIdEnd; ++CenterId)
 			{
-				FPoint Center(0.0, 0.0);
+				FPoint Center(ZeroInit);
 				FIndex NumPointAssigned = 0;
 				for (int LocalThreadId = 0; LocalThreadId < NumThread; ++LocalThreadId)
 				{
