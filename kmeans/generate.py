@@ -3,16 +3,17 @@ from sklearn.datasets import make_blobs
 import sys
 import random
 
+seed = None
+
 # Specify a random seed to generate deterministic data
-random.seed(123)
+random.seed(seed)
 
 # Open the output file (sys.argv[2] indicates the output file name)
 fi = open("data.in", "w")
 
 # Ask for dataset parameters. Empty string triggers default values.
-point_num = 1000000
-cluster_num = 15
-
+point_num = 1000000 if len(sys.argv) < 2 else int(sys.argv[1])
+cluster_num = 20 if len(sys.argv) < 3 else int(sys.argv[2])
 
 box = 900   # Range of centers 
 std = 50    # Standard deviation
@@ -23,7 +24,7 @@ if not (100000 <= point_num <= 1000000 and 1 <= cluster_num <= 20):
 # Generate `POINT_NUM` points with `CLUSTER_NUM` Gaussian clusters.
 # Here, you can set `RANDOM_STATE=CONSTANT` will generate deterministic numbers
 data, clist, centers = make_blobs(n_samples=point_num, centers=cluster_num,
-                         cluster_std=std, center_box=(-box, box), return_centers=True, random_state=123)
+                         cluster_std=std, center_box=(-box, box), return_centers=True, random_state=seed)
 
 # Write the points data to file in a standardized format.
 # The input contains `1 + center_num + point_num` lines.
