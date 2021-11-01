@@ -27,7 +27,7 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 //// START
 
 #define USE_CHECK 1
-#define USE_PERF 1
+#define USE_PERF 0
 #define USE_STATS 0
 
 // Set to non-zero to make the program runs longer
@@ -445,7 +445,7 @@ inline double GetDistance(const FPoint& Restrict LHS, const FPoint& Restrict RHS
 
 #if USE_OMP_NUM_THREAD
 AttrPerf
-inline int GetOmpDefaultNumThread() noexcept
+int GetOmpDefaultNumThread() noexcept
 {
 	int Result;
 	#pragma omp parallel
@@ -529,9 +529,9 @@ FKMeans::~FKMeans() noexcept
 
 AttrPerf
 #if USE_OMP_UPDATE_ASSIGNMENT
-inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict Points, const FCenter* Restrict Centers, FIndex NumPoint, FIndex NumCenter, int NumThread) noexcept
+void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict Points, const FCenter* Restrict Centers, FIndex NumPoint, FIndex NumCenter, int NumThread) noexcept
 #else
-inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict Points, const FCenter* Restrict Centers, FIndex NumPoint, FIndex NumCenter) noexcept
+void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict Points, const FCenter* Restrict Centers, FIndex NumPoint, FIndex NumCenter) noexcept
 #endif
 {
 	SCOPED_TIMER(UpdateAssignment);
@@ -668,9 +668,9 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 AttrPerf
 #if USE_OMP_UPDATE_CENTERS && !USE_OMP_UPDATE_CENTERS_NOCOPY
 #if USE_PACKED_CENTERS
-inline void UpdateCenters(FPackedCenter* Restrict PerThreadCenters, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter, int NumThread) noexcept
+void UpdateCenters(FPackedCenter* Restrict PerThreadCenters, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter, int NumThread) noexcept
 #else
-inline void UpdateCenters(FPoint* Restrict PerThreadCenters, FIndex* Restrict PerThreadPointCount, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter, int NumThread) noexcept
+void UpdateCenters(FPoint* Restrict PerThreadCenters, FIndex* Restrict PerThreadPointCount, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter, int NumThread) noexcept
 #endif
 {
 	SCOPED_TIMER(UpdateCenters);
@@ -760,15 +760,15 @@ inline void UpdateCenters(FPoint* Restrict PerThreadCenters, FIndex* Restrict Pe
 #else
 #if USE_OMP_UPDATE_CENTERS_NOCOPY
 #if USE_PACKED_CENTERS
-inline void UpdateCenters(FPackedCenter* Restrict Centers, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter, int NumThread) noexcept
+void UpdateCenters(FPackedCenter* Restrict Centers, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter, int NumThread) noexcept
 #else
-inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter, int NumThread) noexcept
+void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter, int NumThread) noexcept
 #endif
 #else
 #if USE_PACKED_CENTERS
-inline void UpdateCenters(FPackedCenter* Restrict Centers, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter) noexcept
+void UpdateCenters(FPackedCenter* Restrict Centers, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter) noexcept
 #else
-inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter) noexcept
+void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter) noexcept
 #endif
 #endif
 {
