@@ -855,8 +855,8 @@ TVector<FIndex> FKMeans::Run(int NumIteration)
 			<< ", max iterations = " << NumIteration << "...\n";
 	}
 
-	// Give it an invalid value to trigger at least two iteration
-	OldAssignment[0] = NumPoint;
+	// Fill it with zero to match the reference output of #Center=1
+	BuiltinMemSet(OldAssignment, 0, sizeof(FIndex) * NumPoint);
 
 	while (NumIteration--)
 	{
