@@ -22,6 +22,9 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 	return LHS << RHS.X << " " << RHS.Y;
 }
 
+
+// TODO: Rearrange Centers array
+
 //// START
 
 #define USE_CHECK 1

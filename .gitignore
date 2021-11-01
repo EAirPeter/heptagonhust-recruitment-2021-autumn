@@ -204,4 +204,10 @@ _deps
 
 
 # ProjectFiles
-project/
+project/*
+!project/kmeans.sln
+!project/kmeans.vcxproj
+!project/kmeans.vcxproj.filters
+
+# Vim
+*.swp

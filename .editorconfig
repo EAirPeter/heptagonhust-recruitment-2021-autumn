@@ -1,0 +1,9 @@
+root = true
+
+[*]
+charset = utf-8
+
+[{kmeans.h,kmeans.cpp}]
+indent_style = tab
+indent_size = tab
+tab_width = 4
