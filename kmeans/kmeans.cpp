@@ -24,9 +24,6 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 
 // ^^^^^^ They will not be used in this file
 
-// TODO: Rearrange Centers array
-// TODO: Retest AOT swizzling
-
 //// START
 
 #define USE_CHECK 1
@@ -49,8 +46,17 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 #define USE_OMP_NUM_THREAD                 (1 && USE_OMP)
 #define USE_OMP_UPDATE_ASSIGNMENT          (1 && USE_OMP) // 1
 #define USE_OMP_UPDATE_ASSIGNMENT_FINE     (0 && USE_OMP_UPDATE_ASSIGNMENT && USE_OMP_NUM_THREAD)
-#define USE_OMP_UPDATE_CENTERS             (0 && USE_OMP_NUM_THREAD)
+#define USE_OMP_UPDATE_CENTERS             (1 && USE_OMP_NUM_THREAD)
 #define USE_OMP_PARALLEL_MEMSET            (0 && USE_OMP_UPDATE_CENTERS)
+
+#define USE_PACKED_CENTERS                 1 // 1
+
+// Assume x86-64 always have cache line size 64-byte.
+// And align FPackedCenter to cache line boundary to avoid false sharing when using OMP on UpdateCenters,
+// otherwise just pack as tightest as possible, i.e.
+#define USE_PACKED_CENTERS_ALIGN           (USE_OMP_UPDATE_CENTERS ? 64 : 4) // (64, 4)
+
+static_assert(!USE_PACKED_CENTERS || (USE_PACKED_CENTERS_ALIGN >= 4 && !(USE_PACKED_CENTERS_ALIGN & (USE_PACKED_CENTERS_ALIGN - 1))));
 
 #ifdef _MSC_VER
 #define AttrNoInline __declspec(noinline)
@@ -207,8 +213,6 @@ namespace StatsImpl
 using FIndex = ::index_t;
 using FInPoint = ::Point;
 
-// NOTE: Under O1, cannot count on GCC for inlining vectorized FPoint operators
-
 struct
 #if USE_SIMD
 alignas(XmmAlignment)
@@ -218,14 +222,15 @@ FPoint
 	double X;
 	double Y;
 
+// NOTE: Under O1, cannot count on GCC for inlining vectorized FPoint operators
 #if USE_SIMD_OPERATOR
-	ForceInline	VectorCall
+	ForceInline VectorCall
 	operator __m128d() const noexcept
 	{
 		return _mm_load_pd(AssumeXmmAligned(reinterpret_cast<const double*>(this)));
 	}
 
-	ForceInline	FPoint& VectorCall
+	ForceInline FPoint& VectorCall
 	operator=(__m128d InVec) noexcept
 	{
 		_mm_store_pd(AssumeXmmAligned(reinterpret_cast<double*>(this)), InVec);
@@ -236,6 +241,54 @@ FPoint
 
 static_assert(sizeof(FInPoint) == sizeof(FPoint));
 static_assert(std::conjunction_v<std::is_trivial<FPoint>, std::is_standard_layout<FPoint>>);
+
+#if USE_PACKED_CENTERS
+#if USE_PACKED_CENTERS_ALIGN == 4
+#pragma pack(push, 4)
+#endif
+struct alignas(USE_PACKED_CENTERS_ALIGN) FPackedCenter
+{
+	double X;
+	double Y;
+	FIndex Count;
+
+#if USE_SIMD_OPERATOR
+	ForceInline VectorCall
+	operator __m128d() const noexcept
+	{
+#if USE_PACKED_CENTERS_ALIGN >= 16
+		return _mm_load_pd(AssumeXmmAligned(reinterpret_cast<const double*>(this)));
+#else
+		return _mm_loadu_pd(reinterpret_cast<const double*>(this));
+#endif
+	}
+
+	ForceInline FPackedCenter& VectorCall
+	operator=(__m128d InVec) noexcept
+	{
+#if USE_PACKED_CENTERS_ALIGN >= 16
+		_mm_store_pd(AssumeXmmAligned(reinterpret_cast<double*>(this)), InVec);
+#else
+		_mm_storeu_pd(reinterpret_cast<double*>(this), InVec);
+#endif
+		return *this;
+	}
+#endif
+};
+#if USE_PACKED_CENTERS_ALIGN == 4
+#pragma pack(pop)
+#endif
+
+// Resharper seems not to respect #pragma pack
+#ifndef __RESHARPER__
+static_assert(sizeof(FPackedCenter) == ((20 + USE_PACKED_CENTERS_ALIGN - 1) & ~(USE_PACKED_CENTERS_ALIGN - 1)));
+#endif
+static_assert(std::conjunction_v<std::is_trivial<FPackedCenter>, std::is_standard_layout<FPackedCenter>>);
+
+using FCenter = FPackedCenter;
+#else
+using FCenter = FPoint;
+#endif
 
 template<class RElement>
 using TVector = ::std::vector<RElement>;
@@ -335,6 +388,15 @@ ForceInline FPoint& operator-=(FPoint& LHS, __m128d RHS) noexcept { return LHS =
 ForceInline FPoint& operator*=(FPoint& LHS, double RHS) noexcept { return LHS = static_cast<__m128d>(LHS) * RHS; }
 ForceInline FPoint& operator/=(FPoint& LHS, double RHS) noexcept { return LHS = static_cast<__m128d>(LHS) / RHS; }
 
+#if USE_PACKED_CENTERS
+#ifndef _MSC_VER
+ForceInline __m128d& operator+=(__m128d& LHS, const FPackedCenter& RHS) noexcept { return LHS += static_cast<__m128d>(RHS); }
+#endif
+
+ForceInline FPackedCenter& operator+=(FPackedCenter& LHS, __m128d RHS) noexcept { return LHS = static_cast<__m128d>(LHS) + RHS; }
+ForceInline FPackedCenter& operator/=(FPackedCenter& LHS, double RHS) noexcept { return LHS = static_cast<__m128d>(LHS) / RHS; }
+#endif
+
 #else
 
 using FLocalPoint = FPoint;
@@ -353,6 +415,11 @@ ForceInline FPoint& operator+=(FPoint& LHS, const FPoint& RHS) noexcept { return
 ForceInline FPoint& operator-=(FPoint& LHS, const FPoint& RHS) noexcept { return LHS.X -= RHS.X, LHS.Y -= RHS.Y, LHS; }
 ForceInline FPoint& operator*=(FPoint& LHS, double RHS) noexcept { return LHS.X *= RHS, LHS.Y *= RHS, LHS; }
 ForceInline FPoint& operator/=(FPoint& LHS, double RHS) noexcept { return LHS.X /= RHS, LHS.Y /= RHS, LHS; }
+
+#if USE_PACKED_CENTERS
+ForceInline FPackedCenter& operator+=(FPackedCenter& LHS, __m128d RHS) noexcept { return LHS.X += RHS.X, LHS.Y += RHS.Y, LHS; }
+ForceInline FPackedCenter& operator/=(FPackedCenter& LHS, double RHS) noexcept { return LHS.X /= RHS, LHS.Y /= RHS, LHS; }
+#endif
 
 #endif
 
@@ -395,10 +462,12 @@ inline int GetOmpDefaultNumThread() noexcept
 struct FKMeans
 {
 	FPoint* Points = nullptr;
-	FPoint* Centers = nullptr;
+	FCenter* Centers = nullptr;
 	FIndex* Assignment = nullptr;
 	FIndex* OldAssignment = nullptr;
+#if !USE_PACKED_CENTERS
 	FIndex* PointCount = nullptr;
+#endif
 	FIndex NumPoint;
 	FIndex NumCenter;
 #if USE_OMP_NUM_THREAD
@@ -423,19 +492,28 @@ inline FKMeans::FKMeans(const FInPoint* Restrict InPoints, const FInPoint* Restr
 
 	Points = AllocArray<FPoint>(NumPoint);
 #if USE_OMP_UPDATE_CENTERS
-	Centers = AllocArray<FPoint>(NumCenter * NumThread);
+	Centers = AllocArray<FCenter>(NumCenter * NumThread);
 #else
-	Centers = AllocArray<FPoint>(NumCenter);
+	Centers = AllocArray<FCenter>(NumCenter);
 #endif
 	Assignment = AllocArray<FIndex>(NumPoint);
 	OldAssignment = AllocArray<FIndex>(NumPoint);
+#if !USE_PACKED_CENTERS
 #if USE_OMP_UPDATE_CENTERS
 	PointCount = AllocArray<FIndex>(NumCenter * NumThread);
 #else
 	PointCount = AllocArray<FIndex>(NumCenter);
 #endif
+#endif
 	BuiltinMemCpy(Points, InPoints, sizeof(FPoint) * NumPoint);
+#if USE_PACKED_CENTERS
+	for (FIndex CenterId = 0; CenterId < NumCenter; ++CenterId)
+	{
+		BuiltinMemCpy(&Centers[CenterId], &InInitCenters[CenterId], sizeof(FPoint));
+	}
+#else
 	BuiltinMemCpy(Centers, InInitCenters, sizeof(FPoint) * NumCenter);
+#endif
 }
 
 FKMeans::~FKMeans() noexcept
@@ -444,11 +522,13 @@ FKMeans::~FKMeans() noexcept
 	FreeArray(Centers);
 	FreeArray(Assignment);
 	FreeArray(OldAssignment);
+#if !USE_PACKED_CENTERS
 	FreeArray(PointCount);
+#endif
 }
 
 AttrPerf
-inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict Points, const FPoint* Restrict Centers, FIndex NumPoint, FIndex NumCenter) noexcept
+inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict Points, const FCenter* Restrict Centers, FIndex NumPoint, FIndex NumCenter) noexcept
 {
 	SCOPED_TIMER(UpdateAssignment);
 
@@ -501,7 +581,11 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 			const __m256d VMulY4657 = _mm256_mul_pd(VDiffY4657, VDiffY4657);
 #endif
 #else
+#if USE_PACKED_CENTERS
+			const __m256d VCenter = _mm256_broadcast_pd(reinterpret_cast<const __m128d*>(&Centers[CenterId]));
+#else
 			const __m256d VCenter = _mm256_broadcast_pd(AssumeXmmAligned(reinterpret_cast<const __m128d*>(&Centers[CenterId])));
+#endif
 			const __m256d VDiff01 = _mm256_sub_pd(VPoint01, VCenter);
 			const __m256d VDiff23 = _mm256_sub_pd(VPoint23, VCenter);
 			const __m256d VDiff45 = _mm256_sub_pd(VPoint45, VCenter);
@@ -579,7 +663,11 @@ inline void UpdateAssignment(FIndex* Restrict Assignment, const FPoint* Restrict
 
 AttrPerf
 #if USE_OMP_UPDATE_CENTERS
+#if USE_PACKED_CENTERS
+inline void UpdateCenters(FPackedCenter* Restrict PerThreadCenters, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter, int NumThread) noexcept
+#else
 inline void UpdateCenters(FPoint* Restrict PerThreadCenters, FIndex* Restrict PerThreadPointCount, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter, int NumThread) noexcept
+#endif
 {
 	SCOPED_TIMER(UpdateCenters);
 
@@ -592,12 +680,14 @@ inline void UpdateCenters(FPoint* Restrict PerThreadCenters, FIndex* Restrict Pe
 #if !USE_OMP_PARALLEL_MEMSET
 	{
 		SCOPED_TIMER(ZeroCenterAndPointCount);
-		BuiltinMemSet(PerThreadCenters, 0, sizeof(FPoint) * NumCenter * NumThread);
+		BuiltinMemSet(PerThreadCenters, 0, sizeof(FCenter) * NumCenter * NumThread);
+#if !USE_PACKED_CENTERS
 		BuiltinMemSet(PerThreadPointCount, 0, sizeof(FIndex) * NumCenter * NumThread);
+#endif
 	}
 #endif
 
-	#pragma omp parallel num_threads(NumThread) default(none) firstprivate(PerThreadCenters, PerThreadPointCount, Points, Assignment, NumPoint, NumCenter, NumThread, NumPointDivThread, NumPointModThread, NumCenterDivThread, NumCenterModThread)
+	#pragma omp parallel num_threads(NumThread)
 	{
 		const int ThreadId = omp_get_thread_num();
 
@@ -605,14 +695,18 @@ inline void UpdateCenters(FPoint* Restrict PerThreadCenters, FIndex* Restrict Pe
 			const FIndex LocalNumPoint = ThreadId < NumPointModThread ? NumPointDivThread + 1 : NumPointDivThread;
 			const FIndex PointIdBegin = ThreadId < NumPointModThread ? ThreadId * LocalNumPoint : ThreadId * LocalNumPoint + NumPointModThread;
 			const FIndex PointIdEnd = PointIdBegin + LocalNumPoint;
-			FPoint* Restrict LocalCenters = PerThreadCenters + NumCenter * ThreadId;
+			FCenter* Restrict LocalCenters = PerThreadCenters + NumCenter * ThreadId;
+#if !USE_PACKED_CENTERS
 			FIndex* Restrict LocalPointCount = PerThreadPointCount + NumCenter * ThreadId;
+#endif
 
 #if USE_OMP_PARALLEL_MEMSET
 			{
 				SCOPED_TIMER(ZeroCenterAndPointCount);
-				BuiltinMemSet(LocalCenters, 0, sizeof(FPoint) * NumCenter);
-				BuiltinMemSet(LocalPointCount, 0, sizeof(FIndex) * NumCenter);
+				BuiltinMemSet(PerThreadCenters, 0, sizeof(FCenter) * NumCenter * NumThread);
+#if !USE_PACKED_CENTERS
+				BuiltinMemSet(PerThreadPointCount, 0, sizeof(FIndex) * NumCenter * NumThread);
+#endif
 			}
 #endif
 
@@ -622,7 +716,11 @@ inline void UpdateCenters(FPoint* Restrict PerThreadCenters, FIndex* Restrict Pe
 				{
 					const FIndex CenterId = Assignment[PointId];
 					LocalCenters[CenterId] += Points[PointId];
+#if USE_PACKED_CENTERS
+					++LocalCenters[CenterId].Count;
+#else
 					++LocalPointCount[CenterId];
+#endif
 				}
 			}
 		}
@@ -643,7 +741,11 @@ inline void UpdateCenters(FPoint* Restrict PerThreadCenters, FIndex* Restrict Pe
 				for (int LocalThreadId = 0; LocalThreadId < NumThread; ++LocalThreadId)
 				{
 					Center += PerThreadCenters[LocalThreadId * NumCenter + CenterId];
+#if USE_PACKED_CENTERS
+					NumPointAssigned += PerThreadCenters[LocalThreadId * NumCenter + CenterId].Count;
+#else
 					NumPointAssigned += PerThreadPointCount[LocalThreadId * NumCenter + CenterId];
+#endif
 				}
 				Center /= NumPointAssigned;
 				PerThreadCenters[CenterId] = Center;
@@ -652,14 +754,20 @@ inline void UpdateCenters(FPoint* Restrict PerThreadCenters, FIndex* Restrict Pe
 	}
 }
 #else
+#if USE_PACKED_CENTERS
+inline void UpdateCenters(FPackedCenter* Restrict Centers, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter) noexcept
+#else
 inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount, const FPoint* Restrict Points, const FIndex* Restrict Assignment, FIndex NumPoint, FIndex NumCenter) noexcept
+#endif
 {
 	SCOPED_TIMER(UpdateCenters);
 
 	{
 		SCOPED_TIMER(ZeroCenterAndPointCount);
-		BuiltinMemSet(Centers, 0, sizeof(FPoint) * NumCenter);
+		BuiltinMemSet(Centers, 0, sizeof(FCenter) * NumCenter);
+#if !USE_PACKED_CENTERS
 		BuiltinMemSet(PointCount, 0, sizeof(FIndex) * NumCenter);
+#endif
 	}
 
 	{
@@ -668,7 +776,11 @@ inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount,
 		{
 			const FIndex CenterId = Assignment[PointId];
 			Centers[CenterId] += Points[PointId];
+#if USE_PACKED_CENTERS
+			++Centers[CenterId].Count;
+#else
 			++PointCount[CenterId];
+#endif
 		}
 	}
 
@@ -676,7 +788,11 @@ inline void UpdateCenters(FPoint* Restrict Centers, FIndex* Restrict PointCount,
 		SCOPED_TIMER(UpdateCenters_Division);
 		for (FIndex CenterId = 0; CenterId < NumCenter; ++CenterId)
 		{
+#if USE_PACKED_CENTERS
+			Centers[CenterId] /= Centers[CenterId].Count;
+#else
 			Centers[CenterId] /= PointCount[CenterId];
+#endif
 		}
 	}
 }
@@ -721,7 +837,13 @@ TVector<FIndex> FKMeans::Run(int NumIteration)
 #endif
 
 #if USE_OMP_UPDATE_CENTERS
+#if USE_PACKED_CENTERS
+		UpdateCenters(Centers, Points, Assignment, NumPoint, NumCenter, NumThread);
+#else
 		UpdateCenters(Centers, PointCount, Points, Assignment, NumPoint, NumCenter, NumThread);
+#endif
+#elif USE_PACKED_CENTERS
+		UpdateCenters(Centers, Points, Assignment, NumPoint, NumCenter);
 #else
 		UpdateCenters(Centers, PointCount, Points, Assignment, NumPoint, NumCenter);
 #endif
