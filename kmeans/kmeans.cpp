@@ -45,8 +45,7 @@ std::ostream& operator<<(std::ostream& LHS, const Point& RHS)
 
 #define USE_OMP_NUM_THREAD                 (1 && USE_OMP)
 #define USE_OMP_UPDATE_ASSIGNMENT          (1 && USE_OMP) // 1
-#define USE_OMP_UPDATE_ASSIGNMENT_FINE     (0 && USE_OMP_UPDATE_ASSIGNMENT && USE_OMP_NUM_THREAD)
-#define USE_OMP_UPDATE_CENTERS             (1 && USE_OMP_NUM_THREAD)
+#define USE_OMP_UPDATE_CENTERS             (1 && USE_OMP_NUM_THREAD) // 1
 #define USE_OMP_PARALLEL_MEMSET            (0 && USE_OMP_UPDATE_CENTERS)
 
 #define USE_PACKED_CENTERS                 1 // 1
