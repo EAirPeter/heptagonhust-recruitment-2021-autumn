@@ -63,6 +63,8 @@ K-Means
 
 可以利用`gcc -E -P`或类似工具来帮助阅读与实际生效的`USE_`开关相关的代码。
 
+另外，可以通过`OMP_NUM_THREADS`环境变量来设置OpenMP使用的的线程数。
+
 ## 参考资料
 * [Intel(R) Intrinsics Guide](https://www.intel.com/content/www/us/en/docs/intrinsics-guide/)
 * [Intel(R) 64 and IA-32 Architectures Software DeveloperManuals](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html)
